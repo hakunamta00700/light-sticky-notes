@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -7,6 +9,42 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub struct Note {
     pub id: u64,
     pub body: String,
+    pub color: NoteColor,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum NoteColor {
+    #[default]
+    Yellow,
+    Green,
+    Blue,
+    Pink,
+    Purple,
+    Gray,
+}
+
+impl NoteColor {
+    fn key(self) -> &'static str {
+        match self {
+            Self::Yellow => "yellow",
+            Self::Green => "green",
+            Self::Blue => "blue",
+            Self::Pink => "pink",
+            Self::Purple => "purple",
+            Self::Gray => "gray",
+        }
+    }
+
+    fn from_key(value: &str) -> Self {
+        match value.trim() {
+            "green" => Self::Green,
+            "blue" => Self::Blue,
+            "pink" => Self::Pink,
+            "purple" => Self::Purple,
+            "gray" => Self::Gray,
+            _ => Self::Yellow,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -33,9 +71,13 @@ impl NoteStore {
             else {
                 continue;
             };
+            let color = fs::read_to_string(color_path(&root, id))
+                .map(|value| NoteColor::from_key(&value))
+                .unwrap_or_default();
             notes.push(Note {
                 id,
                 body: fs::read_to_string(path)?,
+                color,
             });
         }
 
@@ -51,8 +93,16 @@ impl NoteStore {
         &self.notes
     }
 
-    pub fn note_mut(&mut self, index: usize) -> Option<&mut Note> {
-        self.notes.get_mut(index)
+    pub fn note_by_id(&self, id: u64) -> Option<&Note> {
+        self.notes.iter().find(|note| note.id == id)
+    }
+
+    pub fn note_by_id_mut(&mut self, id: u64) -> Option<&mut Note> {
+        self.notes.iter_mut().find(|note| note.id == id)
+    }
+
+    pub fn index_of(&self, id: u64) -> Option<usize> {
+        self.notes.iter().position(|note| note.id == id)
     }
 
     pub fn create_note(&mut self) -> io::Result<usize> {
@@ -67,6 +117,7 @@ impl NoteStore {
         let note = Note {
             id,
             body: String::new(),
+            color: NoteColor::default(),
         };
         self.write(&note)?;
         self.notes.insert(0, note);
@@ -80,6 +131,15 @@ impl NoteStore {
         self.write(note)
     }
 
+    pub fn set_color(&mut self, id: u64, color: NoteColor) -> io::Result<()> {
+        let note = self.note_by_id_mut(id).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "note id does not exist")
+        })?;
+        note.color = color;
+        let note = note.clone();
+        self.write_color(&note)
+    }
+
     pub fn delete(&mut self, index: usize) -> io::Result<usize> {
         if index >= self.notes.len() {
             return Err(io::Error::new(
@@ -90,6 +150,11 @@ impl NoteStore {
 
         let note = self.notes.remove(index);
         match fs::remove_file(self.path_for(note.id)) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        match fs::remove_file(color_path(&self.root, note.id)) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => return Err(error),
@@ -108,12 +173,33 @@ impl NoteStore {
         if final_path.exists() {
             fs::remove_file(&final_path)?;
         }
+        fs::rename(temporary_path, final_path)?;
+        self.write_color(note)
+    }
+
+    fn write_color(&self, note: &Note) -> io::Result<()> {
+        let final_path = color_path(&self.root, note.id);
+        if fs::read_to_string(&final_path)
+            .map(|value| value.trim() == note.color.key())
+            .unwrap_or(false)
+        {
+            return Ok(());
+        }
+        let temporary_path = final_path.with_extension("color.tmp");
+        fs::write(&temporary_path, note.color.key().as_bytes())?;
+        if final_path.exists() {
+            fs::remove_file(&final_path)?;
+        }
         fs::rename(temporary_path, final_path)
     }
 
     fn path_for(&self, id: u64) -> PathBuf {
         self.root.join(format!("{id:020}.txt"))
     }
+}
+
+fn color_path(root: &Path, id: u64) -> PathBuf {
+    root.join(format!("{id:020}.color"))
 }
 
 pub fn default_data_dir() -> PathBuf {
@@ -163,17 +249,22 @@ mod tests {
         let mut store = NoteStore::open(root.clone()).unwrap();
         assert_eq!(store.notes().len(), 1);
 
-        store.note_mut(0).unwrap().body = "첫 메모".into();
+        let first_id = store.notes()[0].id;
+        store.note_by_id_mut(first_id).unwrap().body = "첫 메모".into();
         store.save(0).unwrap();
         store.create_note().unwrap();
-        store.note_mut(0).unwrap().body = "둘째 메모".into();
+        let second_id = store.notes()[0].id;
+        store.note_by_id_mut(second_id).unwrap().body = "둘째 메모".into();
         store.save(0).unwrap();
+        store.set_color(second_id, NoteColor::Blue).unwrap();
 
         let mut reopened = NoteStore::open(root.clone()).unwrap();
         assert_eq!(reopened.notes().len(), 2);
         assert_eq!(reopened.notes()[0].body, "둘째 메모");
+        assert_eq!(reopened.notes()[0].color, NoteColor::Blue);
         reopened.delete(0).unwrap();
         assert_eq!(reopened.notes().len(), 1);
+        assert!(!color_path(&root, second_id).exists());
 
         fs::remove_dir_all(root).unwrap();
     }
