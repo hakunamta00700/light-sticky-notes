@@ -1,4 +1,3 @@
-use std::ffi::c_void;
 use std::ptr::{null, null_mut};
 use std::rc::Rc;
 
@@ -14,11 +13,13 @@ use super::markdown::{self, InlineFormat};
 use super::note_view::{self, ButtonKind};
 use super::theme::{TEXT, note_palette};
 use super::win32::{
-    client_rect, close_window, create_brush, create_child_control, create_font,
-    create_owner_button, delete_gdi_object, disable_native_border, focus, hit_test, minimize,
-    move_child, move_window, notify, restart_timer, restore_and_activate, set_control_font,
-    set_cue_banner, set_topmost, show_error, show_popup_menu, stop_timer, wide,
+    Brush, Font, client_rect, close_window, create_child_control, create_owner_button,
+    disable_native_border, focus, hit_test, is_window, minimize, move_child, move_window,
+    notify, restart_timer, restore_and_activate, set_control_font, set_cue_banner,
+    set_dc_colors, set_min_track_size, set_topmost, show_and_update, show_error,
+    show_popup_menu, stop_timer, wide,
 };
+use super::window_host::{CreateContext, MessageResult, WindowController, dispatch};
 use super::{NOTE_CLASS, SharedState, WM_NOTE_CLOSED, WM_REFRESH_NOTES};
 
 const ID_EDITOR: usize = 2001;
@@ -43,7 +44,7 @@ const ID_COLOR_GRAY: usize = 2106;
 const SAVE_TIMER: usize = 1;
 const SAVE_DELAY_MS: u32 = 500;
 
-struct NoteState {
+struct NoteWindow {
     window: HWND,
     editor: HWND,
     shared: Rc<SharedState>,
@@ -53,13 +54,13 @@ struct NoteState {
     dirty: bool,
     suppress_change: bool,
     pinned: bool,
-    font: HFONT,
-    font_button: HFONT,
-    note_brush: HBRUSH,
+    font: Font,
+    font_button: Font,
+    note_brush: Brush,
 }
 
-impl NoteState {
-    fn new(shared: Rc<SharedState>, manager: HWND, note_id: u64) -> Box<Self> {
+impl NoteWindow {
+    fn new(shared: Rc<SharedState>, manager: HWND, note_id: u64) -> Self {
         let color = shared
             .store
             .borrow()
@@ -67,7 +68,7 @@ impl NoteState {
             .map(|note| note.color)
             .unwrap_or_default();
         let palette = note_palette(color);
-        Box::new(Self {
+        Self {
             window: null_mut(),
             editor: null_mut(),
             shared,
@@ -77,10 +78,10 @@ impl NoteState {
             dirty: false,
             suppress_change: false,
             pinned: false,
-            font: create_font(22, FW_NORMAL as i32, false),
-            font_button: create_font(18, FW_NORMAL as i32, false),
-            note_brush: create_brush(palette.body),
-        })
+            font: Font::new(22, FW_NORMAL as i32, false),
+            font_button: Font::new(18, FW_NORMAL as i32, false),
+            note_brush: Brush::new(palette.body),
+        }
     }
 
     fn initialize(&mut self) -> Result<(), String> {
@@ -113,7 +114,7 @@ impl NoteState {
         if controls.iter().any(|handle| handle.is_null()) {
             return Err("메모 창의 컨트롤을 만들지 못했습니다.".into());
         }
-        set_control_font(self.editor, self.font);
+        set_control_font(self.editor, self.font.handle());
         markdown::configure(self.editor, note_palette(self.color).body, TEXT);
         set_cue_banner(self.editor, "기억할 내용을 입력하세요");
         self.load();
@@ -243,8 +244,7 @@ impl NoteState {
         }
         self.color = color;
         let palette = note_palette(color);
-        delete_gdi_object(self.note_brush);
-        self.note_brush = create_brush(palette.body);
+        self.note_brush = Brush::new(palette.body);
         markdown::set_background(self.editor, palette.body);
         super::win32::invalidate(self.editor, true);
         super::win32::invalidate(self.window, true);
@@ -296,20 +296,12 @@ impl NoteState {
     }
 }
 
-impl Drop for NoteState {
-    fn drop(&mut self) {
-        delete_gdi_object(self.font);
-        delete_gdi_object(self.font_button);
-        delete_gdi_object(self.note_brush);
-    }
-}
-
 pub(crate) fn create_window(
     shared: Rc<SharedState>,
     manager: HWND,
     note_id: u64,
 ) -> Result<HWND, String> {
-    let state_ptr = Box::into_raw(NoteState::new(shared, manager, note_id));
+    let context = CreateContext::new(NoteWindow::new(shared, manager, note_id));
     let window = unsafe {
         CreateWindowExW(
             WS_EX_TOOLWINDOW,
@@ -323,17 +315,13 @@ pub(crate) fn create_window(
             manager,
             null_mut(),
             GetModuleHandleW(null()),
-            state_ptr as *mut c_void,
+            context.as_ptr(),
         )
     };
     if window.is_null() {
-        unsafe { drop(Box::from_raw(state_ptr)) };
         return Err("메모 창을 만들지 못했습니다.".into());
     }
-    unsafe {
-        ShowWindow(window, SW_SHOW);
-        UpdateWindow(window);
-    }
+    show_and_update(window);
     Ok(window)
 }
 
@@ -343,106 +331,96 @@ pub(crate) unsafe extern "system" fn window_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    if message == WM_NCCREATE {
-        let create = lparam as *const CREATESTRUCTW;
-        let state = unsafe { (*create).lpCreateParams as *mut NoteState };
-        unsafe {
-            (*state).window = window;
-            SetWindowLongPtrW(window, GWLP_USERDATA, state as isize);
-        }
+    unsafe { dispatch::<NoteWindow>(window, message, wparam, lparam) }
+}
+
+impl WindowController for NoteWindow {
+    fn attach(&mut self, window: HWND) {
+        self.window = window;
     }
-    let state = unsafe { GetWindowLongPtrW(window, GWLP_USERDATA) as *mut NoteState };
-    match message {
-        WM_CREATE if !state.is_null() => {
-            disable_native_border(window);
-            match unsafe { (*state).initialize() } {
-                Ok(()) => 0,
-                Err(error) => {
-                    show_error(window, &error);
-                    -1
+
+    fn handle_message(
+        &mut self,
+        message: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> MessageResult {
+        match message {
+            WM_CREATE => {
+                disable_native_border(self.window);
+                match self.initialize() {
+                    Ok(()) => MessageResult::Handled(0),
+                    Err(error) => {
+                        show_error(self.window, &error);
+                        MessageResult::Handled(-1)
+                    }
                 }
             }
-        }
-        WM_NCCALCSIZE => 0,
-        WM_NCPAINT => 0,
-        WM_NCACTIVATE => 1,
-        WM_NCHITTEST => hit_test(window, lparam, 52),
-        WM_SIZE if !state.is_null() => {
-            unsafe { (*state).layout() };
-            0
-        }
-        WM_PAINT if !state.is_null() => {
-            unsafe { note_view::paint(window, (*state).color) };
-            0
-        }
-        WM_ERASEBKGND => 1,
-        WM_CTLCOLOREDIT if !state.is_null() => {
-            let hdc = wparam as HDC;
-            unsafe {
-                SetBkColor(hdc, note_palette((*state).color).body);
-                SetTextColor(hdc, TEXT);
-                (*state).note_brush as LRESULT
+            WM_NCCALCSIZE => MessageResult::Handled(0),
+            WM_NCPAINT => MessageResult::Handled(0),
+            WM_NCACTIVATE => MessageResult::Handled(1),
+            WM_NCHITTEST => MessageResult::Handled(hit_test(self.window, lparam, 52)),
+            WM_SIZE => {
+                self.layout();
+                MessageResult::Handled(0)
             }
-        }
-        WM_DRAWITEM if !state.is_null() => {
-            let draw = unsafe { &*(lparam as *const DRAWITEMSTRUCT) };
-            let kind = match draw.CtlID as usize {
-                ID_NOTE_PIN => ButtonKind::Pin,
-                ID_NOTE_MENU | ID_NOTE_MORE | ID_NOTE_MIN | ID_NOTE_CLOSE => ButtonKind::Title,
-                ID_SHOW_MANAGER => ButtonKind::Manager,
-                _ => ButtonKind::Toolbar,
-            };
-            unsafe {
+            WM_PAINT => {
+                note_view::paint(self.window, self.color);
+                MessageResult::Handled(0)
+            }
+            WM_ERASEBKGND => MessageResult::Handled(1),
+            WM_CTLCOLOREDIT => {
+                let hdc = wparam as HDC;
+                set_dc_colors(hdc, note_palette(self.color).body, TEXT);
+                MessageResult::Handled(self.note_brush.handle() as LRESULT)
+            }
+            WM_DRAWITEM => {
+                let Some(draw) = (unsafe { (lparam as *const DRAWITEMSTRUCT).as_ref() }) else {
+                    return MessageResult::Handled(0);
+                };
+                let kind = match draw.CtlID as usize {
+                    ID_NOTE_PIN => ButtonKind::Pin,
+                    ID_NOTE_MENU | ID_NOTE_MORE | ID_NOTE_MIN | ID_NOTE_CLOSE => {
+                        ButtonKind::Title
+                    }
+                    ID_SHOW_MANAGER => ButtonKind::Manager,
+                    _ => ButtonKind::Toolbar,
+                };
                 note_view::draw_button(
                     draw,
-                    (*state).color,
-                    (*state).pinned,
-                    (*state).font_button,
+                    self.color,
+                    self.pinned,
+                    self.font_button.handle(),
                     kind,
-                )
-            };
-            1
-        }
-        WM_COMMAND if !state.is_null() => {
-            let id = wparam & 0xffff;
-            let notification = ((wparam >> 16) & 0xffff) as u32;
-            unsafe { (*state).handle_command(id, notification) };
-            0
-        }
-        WM_TIMER if !state.is_null() && wparam == SAVE_TIMER => {
-            unsafe { (*state).save() };
-            0
-        }
-        WM_GETMINMAXINFO => {
-            let info = lparam as *mut MINMAXINFO;
-            if !info.is_null() {
-                unsafe {
-                    (*info).ptMinTrackSize.x = 380;
-                    (*info).ptMinTrackSize.y = 320;
-                }
+                );
+                MessageResult::Handled(1)
             }
-            0
-        }
-        WM_CLOSE => {
-            if !state.is_null() {
-                unsafe { (*state).save() };
+            WM_COMMAND => {
+                let id = wparam & 0xffff;
+                let notification = ((wparam >> 16) & 0xffff) as u32;
+                self.handle_command(id, notification);
+                MessageResult::Handled(0)
             }
-            unsafe { DestroyWindow(window) };
-            0
-        }
-        WM_NCDESTROY if !state.is_null() => {
-            let note_id = unsafe { (*state).note_id };
-            let manager = unsafe { (*state).manager };
-            unsafe {
-                SetWindowLongPtrW(window, GWLP_USERDATA, 0);
-                if IsWindow(manager) != 0 {
-                    SendMessageW(manager, WM_NOTE_CLOSED, note_id as WPARAM, 0);
-                }
-                drop(Box::from_raw(state));
-                DefWindowProcW(window, message, wparam, lparam)
+            WM_TIMER if wparam == SAVE_TIMER => {
+                self.save();
+                MessageResult::Handled(0)
             }
+            WM_GETMINMAXINFO => {
+                set_min_track_size(lparam, 380, 320);
+                MessageResult::Handled(0)
+            }
+            WM_CLOSE => {
+                self.save();
+                MessageResult::Destroy
+            }
+            _ => MessageResult::Default,
         }
-        _ => unsafe { DefWindowProcW(window, message, wparam, lparam) },
+    }
+
+    fn on_destroy(&mut self) {
+        if is_window(self.manager) {
+            notify(self.manager, WM_NOTE_CLOSED, self.note_id as usize);
+        }
     }
 }
 

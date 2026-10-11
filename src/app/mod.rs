@@ -5,6 +5,7 @@ mod note;
 mod note_view;
 mod theme;
 mod win32;
+mod window_host;
 
 use std::cell::RefCell;
 use std::ptr::null_mut;

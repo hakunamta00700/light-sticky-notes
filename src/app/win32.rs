@@ -248,7 +248,7 @@ pub(crate) fn confirm(owner: HWND, message: &str) -> bool {
 }
 
 pub(crate) fn close_window(window: HWND) {
-    unsafe { SendMessageW(window, WM_CLOSE, 0, 0) };
+    unsafe { PostMessageW(window, WM_CLOSE, 0, 0) };
 }
 
 pub(crate) fn restore_and_activate(window: HWND) {
@@ -264,6 +264,27 @@ pub(crate) fn minimize(window: HWND) {
 
 pub(crate) fn is_window(window: HWND) -> bool {
     unsafe { IsWindow(window) != 0 }
+}
+
+pub(crate) fn set_dc_colors(hdc: HDC, background: COLORREF, text: COLORREF) {
+    unsafe {
+        SetBkColor(hdc, background);
+        SetTextColor(hdc, text);
+    }
+}
+
+pub(crate) fn set_min_track_size(lparam: LPARAM, width: i32, height: i32) {
+    let info = lparam as *mut MINMAXINFO;
+    if !info.is_null() {
+        unsafe {
+            (*info).ptMinTrackSize.x = width;
+            (*info).ptMinTrackSize.y = height;
+        }
+    }
+}
+
+pub(crate) fn quit_message_loop() {
+    unsafe { PostQuitMessage(0) };
 }
 
 pub(crate) fn show_popup_menu(
@@ -299,34 +320,60 @@ pub(crate) fn show_popup_menu(
     (selected != 0).then_some(selected)
 }
 
-pub(crate) fn create_font(size: i32, weight: i32, italic: bool) -> HFONT {
-    unsafe {
-        CreateFontW(
-            -size,
-            0,
-            0,
-            0,
-            weight,
-            italic as u32,
-            0,
-            0,
-            DEFAULT_CHARSET as u32,
-            OUT_DEFAULT_PRECIS as u32,
-            CLIP_DEFAULT_PRECIS as u32,
-            CLEARTYPE_QUALITY as u32,
-            (DEFAULT_PITCH | FF_DONTCARE) as u32,
-            wide("Segoe UI").as_ptr(),
-        )
+pub(crate) struct Font(HFONT);
+
+impl Font {
+    pub(crate) fn new(size: i32, weight: i32, italic: bool) -> Self {
+        Self(unsafe {
+            CreateFontW(
+                -size,
+                0,
+                0,
+                0,
+                weight,
+                italic as u32,
+                0,
+                0,
+                DEFAULT_CHARSET as u32,
+                OUT_DEFAULT_PRECIS as u32,
+                CLIP_DEFAULT_PRECIS as u32,
+                CLEARTYPE_QUALITY as u32,
+                (DEFAULT_PITCH | FF_DONTCARE) as u32,
+                wide("Segoe UI").as_ptr(),
+            )
+        })
+    }
+
+    pub(crate) fn handle(&self) -> HFONT {
+        self.0
     }
 }
 
-pub(crate) fn create_brush(color: COLORREF) -> HBRUSH {
-    unsafe { CreateSolidBrush(color) }
+impl Drop for Font {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe { DeleteObject(self.0) };
+        }
+    }
 }
 
-pub(crate) fn delete_gdi_object(object: *mut c_void) {
-    if !object.is_null() {
-        unsafe { DeleteObject(object) };
+pub(crate) struct Brush(HBRUSH);
+
+impl Brush {
+    pub(crate) fn new(color: COLORREF) -> Self {
+        Self(unsafe { CreateSolidBrush(color) })
+    }
+
+    pub(crate) fn handle(&self) -> HBRUSH {
+        self.0
+    }
+}
+
+impl Drop for Brush {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe { DeleteObject(self.0) };
+        }
     }
 }
 

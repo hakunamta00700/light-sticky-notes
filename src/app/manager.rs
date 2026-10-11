@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::ffi::c_void;
 use std::ptr::{null, null_mut};
 use std::rc::Rc;
 
@@ -16,12 +15,13 @@ use super::markdown;
 use super::note;
 use super::theme::{MANAGER_BG, PANEL_BG, TEXT};
 use super::win32::{
-    add_list_item, clear_list, client_rect, configure_list, create_brush,
-    close_window, confirm, create_child_control, create_font, create_owner_button,
-    delete_gdi_object, disable_native_border, finish_list_update, hit_test, invalidate,
-    is_window, minimize, move_child, move_window, restore_and_activate, select_list_item,
-    selected_list_index, set_control_font, set_cue_banner, show_error, wide, window_text,
+    Brush, Font, add_list_item, clear_list, client_rect, close_window, configure_list, confirm,
+    create_child_control, create_owner_button, disable_native_border, finish_list_update,
+    hit_test, invalidate, is_window, minimize, move_child, move_window, restore_and_activate,
+    quit_message_loop, select_list_item, selected_list_index, set_control_font, set_cue_banner,
+    set_dc_colors, set_min_track_size, show_error, wide, window_text,
 };
+use super::window_host::{CreateContext, MessageResult, WindowController, dispatch};
 use super::{APP_NAME, MANAGER_CLASS, SharedState, WM_NOTE_CLOSED, WM_REFRESH_NOTES};
 
 const ID_LIST: usize = 1001;
@@ -32,35 +32,35 @@ const ID_MANAGER_MIN: usize = 1005;
 const ID_MANAGER_CLOSE: usize = 1006;
 const ID_MANAGER_MORE: usize = 1007;
 
-struct ManagerState {
+struct ManagerWindow {
     window: HWND,
     list: HWND,
     search: HWND,
     shared: Rc<SharedState>,
     visible_ids: Vec<u64>,
     open_notes: HashMap<u64, HWND>,
-    font: HFONT,
-    font_medium: HFONT,
-    font_title: HFONT,
-    background_brush: HBRUSH,
-    panel_brush: HBRUSH,
+    font: Font,
+    font_medium: Font,
+    font_title: Font,
+    background_brush: Brush,
+    panel_brush: Brush,
 }
 
-impl ManagerState {
-    fn new(shared: Rc<SharedState>) -> Box<Self> {
-        Box::new(Self {
+impl ManagerWindow {
+    fn new(shared: Rc<SharedState>) -> Self {
+        Self {
             window: null_mut(),
             list: null_mut(),
             search: null_mut(),
             shared,
             visible_ids: Vec::new(),
             open_notes: HashMap::new(),
-            font: create_font(18, FW_NORMAL as i32, false),
-            font_medium: create_font(18, FW_SEMIBOLD as i32, false),
-            font_title: create_font(20, FW_SEMIBOLD as i32, false),
-            background_brush: create_brush(MANAGER_BG),
-            panel_brush: create_brush(PANEL_BG),
-        })
+            font: Font::new(18, FW_NORMAL as i32, false),
+            font_medium: Font::new(18, FW_SEMIBOLD as i32, false),
+            font_title: Font::new(20, FW_SEMIBOLD as i32, false),
+            background_brush: Brush::new(MANAGER_BG),
+            panel_brush: Brush::new(PANEL_BG),
+        }
     }
 
     fn initialize(&mut self) -> Result<(), String> {
@@ -94,7 +94,7 @@ impl ManagerState {
         if controls.iter().any(|handle| handle.is_null()) {
             return Err("관리 창의 컨트롤을 만들지 못했습니다.".into());
         }
-        set_control_font(self.search, self.font);
+        set_control_font(self.search, self.font.handle());
         set_cue_banner(self.search, "메모 검색");
         configure_list(self.list, 126);
         self.refresh_list();
@@ -230,18 +230,8 @@ impl ManagerState {
     }
 }
 
-impl Drop for ManagerState {
-    fn drop(&mut self) {
-        delete_gdi_object(self.font);
-        delete_gdi_object(self.font_medium);
-        delete_gdi_object(self.font_title);
-        delete_gdi_object(self.background_brush);
-        delete_gdi_object(self.panel_brush);
-    }
-}
-
 pub(crate) fn create_window(shared: Rc<SharedState>) -> Result<HWND, String> {
-    let state_ptr = Box::into_raw(ManagerState::new(shared));
+    let context = CreateContext::new(ManagerWindow::new(shared));
     let window = unsafe {
         CreateWindowExW(
             WS_EX_APPWINDOW,
@@ -255,11 +245,10 @@ pub(crate) fn create_window(shared: Rc<SharedState>) -> Result<HWND, String> {
             null_mut(),
             null_mut(),
             GetModuleHandleW(null()),
-            state_ptr as *mut c_void,
+            context.as_ptr(),
         )
     };
     if window.is_null() {
-        unsafe { drop(Box::from_raw(state_ptr)) };
         return Err("관리 창을 만들지 못했습니다.".into());
     }
     Ok(window)
@@ -271,120 +260,104 @@ pub(crate) unsafe extern "system" fn window_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    if message == WM_NCCREATE {
-        let create = lparam as *const CREATESTRUCTW;
-        let state = unsafe { (*create).lpCreateParams as *mut ManagerState };
-        unsafe {
-            (*state).window = window;
-            SetWindowLongPtrW(window, GWLP_USERDATA, state as isize);
-        }
+    unsafe { dispatch::<ManagerWindow>(window, message, wparam, lparam) }
+}
+
+impl WindowController for ManagerWindow {
+    fn attach(&mut self, window: HWND) {
+        self.window = window;
     }
-    let state = unsafe { GetWindowLongPtrW(window, GWLP_USERDATA) as *mut ManagerState };
-    match message {
-        WM_CREATE if !state.is_null() => {
-            disable_native_border(window);
-            match unsafe { (*state).initialize() } {
-                Ok(()) => 0,
-                Err(error) => {
-                    show_error(window, &error);
-                    -1
+
+    fn handle_message(
+        &mut self,
+        message: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> MessageResult {
+        match message {
+            WM_CREATE => {
+                disable_native_border(self.window);
+                match self.initialize() {
+                    Ok(()) => MessageResult::Handled(0),
+                    Err(error) => {
+                        show_error(self.window, &error);
+                        MessageResult::Handled(-1)
+                    }
                 }
             }
-        }
-        WM_NCCALCSIZE => 0,
-        WM_NCPAINT => 0,
-        WM_NCACTIVATE => 1,
-        WM_NCHITTEST => hit_test(window, lparam, 68),
-        WM_SIZE if !state.is_null() => {
-            unsafe { (*state).layout() };
-            0
-        }
-        WM_PAINT if !state.is_null() => {
-            unsafe {
+            WM_NCCALCSIZE => MessageResult::Handled(0),
+            WM_NCPAINT => MessageResult::Handled(0),
+            WM_NCACTIVATE => MessageResult::Handled(1),
+            WM_NCHITTEST => MessageResult::Handled(hit_test(self.window, lparam, 68)),
+            WM_SIZE => {
+                self.layout();
+                MessageResult::Handled(0)
+            }
+            WM_PAINT => {
                 manager_view::paint(
-                    window,
-                    (*state).visible_ids.len(),
-                    (*state).font_title,
-                    (*state).font_medium,
-                )
-            };
-            0
-        }
-        WM_ERASEBKGND => 1,
-        WM_CTLCOLORLISTBOX if !state.is_null() => {
-            let hdc = wparam as HDC;
-            unsafe {
-                SetBkColor(hdc, MANAGER_BG);
-                SetTextColor(hdc, TEXT);
-                (*state).background_brush as LRESULT
+                    self.window,
+                    self.visible_ids.len(),
+                    self.font_title.handle(),
+                    self.font_medium.handle(),
+                );
+                MessageResult::Handled(0)
             }
-        }
-        WM_CTLCOLOREDIT if !state.is_null() => {
-            let hdc = wparam as HDC;
-            unsafe {
-                SetBkColor(hdc, PANEL_BG);
-                SetTextColor(hdc, TEXT);
-                (*state).panel_brush as LRESULT
+            WM_ERASEBKGND => MessageResult::Handled(1),
+            WM_CTLCOLORLISTBOX => {
+                let hdc = wparam as HDC;
+                set_dc_colors(hdc, MANAGER_BG, TEXT);
+                MessageResult::Handled(self.background_brush.handle() as LRESULT)
             }
-        }
-        WM_DRAWITEM if !state.is_null() => {
-            let draw = unsafe { &*(lparam as *const DRAWITEMSTRUCT) };
-            if draw.CtlID == ID_LIST as u32 {
-                unsafe {
+            WM_CTLCOLOREDIT => {
+                let hdc = wparam as HDC;
+                set_dc_colors(hdc, PANEL_BG, TEXT);
+                MessageResult::Handled(self.panel_brush.handle() as LRESULT)
+            }
+            WM_DRAWITEM => {
+                let Some(draw) = (unsafe { (lparam as *const DRAWITEMSTRUCT).as_ref() }) else {
+                    return MessageResult::Handled(0);
+                };
+                if draw.CtlID == ID_LIST as u32 {
                     manager_view::draw_note_card(
                         draw,
-                        &(*state).shared,
-                        &(*state).visible_ids,
-                        (*state).font,
-                        (*state).font_medium,
+                        &self.shared,
+                        &self.visible_ids,
+                        self.font.handle(),
+                        self.font_medium.handle(),
                     )
+                } else {
+                    let header = matches!(
+                        draw.CtlID as usize,
+                        ID_MANAGER_MIN | ID_MANAGER_CLOSE | ID_MANAGER_MORE
+                    );
+                    manager_view::draw_button(draw, self.font.handle(), header)
                 }
-            } else {
-                let header = matches!(
-                    draw.CtlID as usize,
-                    ID_MANAGER_MIN | ID_MANAGER_CLOSE | ID_MANAGER_MORE
-                );
-                unsafe { manager_view::draw_button(draw, (*state).font, header) }
+                MessageResult::Handled(1)
             }
-            1
-        }
-        WM_COMMAND if !state.is_null() => {
-            let id = wparam & 0xffff;
-            let notification = ((wparam >> 16) & 0xffff) as u32;
-            unsafe { (*state).handle_command(id, notification) };
-            0
-        }
-        WM_REFRESH_NOTES if !state.is_null() => {
-            unsafe { (*state).refresh_list() };
-            0
-        }
-        WM_NOTE_CLOSED if !state.is_null() => {
-            unsafe { (*state).open_notes.remove(&(wparam as u64)) };
-            0
-        }
-        WM_GETMINMAXINFO => {
-            let info = lparam as *mut MINMAXINFO;
-            if !info.is_null() {
-                unsafe {
-                    (*info).ptMinTrackSize.x = 440;
-                    (*info).ptMinTrackSize.y = 540;
-                }
+            WM_COMMAND => {
+                let id = wparam & 0xffff;
+                let notification = ((wparam >> 16) & 0xffff) as u32;
+                self.handle_command(id, notification);
+                MessageResult::Handled(0)
             }
-            0
+            WM_REFRESH_NOTES => {
+                self.refresh_list();
+                MessageResult::Handled(0)
+            }
+            WM_NOTE_CLOSED => {
+                self.open_notes.remove(&(wparam as u64));
+                MessageResult::Handled(0)
+            }
+            WM_GETMINMAXINFO => {
+                set_min_track_size(lparam, 440, 540);
+                MessageResult::Handled(0)
+            }
+            WM_CLOSE => MessageResult::Destroy,
+            WM_DESTROY => {
+                quit_message_loop();
+                MessageResult::Handled(0)
+            }
+            _ => MessageResult::Default,
         }
-        WM_CLOSE => {
-            unsafe { DestroyWindow(window) };
-            0
-        }
-        WM_DESTROY => {
-            unsafe { PostQuitMessage(0) };
-            0
-        }
-        WM_NCDESTROY if !state.is_null() => unsafe {
-            SetWindowLongPtrW(window, GWLP_USERDATA, 0);
-            drop(Box::from_raw(state));
-            DefWindowProcW(window, message, wparam, lparam)
-        },
-        _ => unsafe { DefWindowProcW(window, message, wparam, lparam) },
     }
 }
