@@ -1,9 +1,14 @@
+//! 애플리케이션의 색상 디자인 토큰을 정의한다.
+//!
+//! 색상 값을 뷰 코드에 흩뿌리지 않고 이 모듈에 모아 두면 테마를 일관되게 변경할 수 있다.
+
 #![forbid(unsafe_code)]
 
 use windows_sys::Win32::Foundation::COLORREF;
 
 use crate::store::NoteColor;
 
+// 관리 창 전체에서 공유하는 색상 상수다. `const`는 실행 중 할당 없이 값에 직접 접근한다.
 pub(crate) const MANAGER_BG: COLORREF = rgb(13, 14, 14);
 pub(crate) const PANEL_BG: COLORREF = rgb(39, 40, 39);
 pub(crate) const PANEL_HOVER: COLORREF = rgb(48, 49, 47);
@@ -12,10 +17,12 @@ pub(crate) const TEXT: COLORREF = rgb(247, 244, 234);
 pub(crate) const MUTED: COLORREF = rgb(188, 184, 173);
 pub(crate) const DARK_TEXT: COLORREF = rgb(20, 20, 16);
 
+/// Win32가 사용하는 `COLORREF`의 BGR 비트 배열로 RGB 값을 변환한다.
 pub(crate) const fn rgb(red: u32, green: u32, blue: u32) -> COLORREF {
     red | (green << 8) | (blue << 16)
 }
 
+/// 하나의 메모 색상에서 파생되는 모든 화면 색상을 묶은 값 객체다.
 #[derive(Clone, Copy)]
 pub(crate) struct NotePalette {
     pub(crate) top: COLORREF,
@@ -25,6 +32,7 @@ pub(crate) struct NotePalette {
     pub(crate) selected: COLORREF,
 }
 
+/// 도메인 색상 `NoteColor`를 실제 렌더링용 팔레트로 변환한다.
 pub(crate) fn note_palette(color: NoteColor) -> NotePalette {
     match color {
         NoteColor::Yellow => NotePalette {

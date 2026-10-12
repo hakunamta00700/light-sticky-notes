@@ -1,3 +1,7 @@
+//! 개별 메모 창의 배경과 owner-draw 버튼을 그린다.
+//!
+//! 이 모듈은 전달받은 색상과 상태를 표현할 뿐 저장소나 창 상태를 변경하지 않는다.
+
 #![forbid(unsafe_code)]
 
 use windows_sys::Win32::Foundation::{HWND, RECT};
@@ -13,6 +17,7 @@ use super::win32::{
     draw_text, fill_rect, fill_round_rect, stroke_round_rect, window_text, with_paint,
 };
 
+/// 같은 버튼 그리기 함수가 위치별 표현 차이를 알 수 있게 하는 의미 있는 열거형이다.
 #[derive(Clone, Copy)]
 pub(super) enum ButtonKind {
     Title,
@@ -21,6 +26,7 @@ pub(super) enum ButtonKind {
     Toolbar,
 }
 
+/// 현재 메모 색상으로 제목 영역, 본문, 도구 모음 배경을 칠한다.
 pub(super) fn paint(window: HWND, color: NoteColor) {
     let palette = note_palette(color);
     with_paint(window, |hdc, rect| {
@@ -57,6 +63,7 @@ pub(super) fn paint(window: HWND, color: NoteColor) {
     });
 }
 
+/// 버튼 종류, 눌림 상태, 핀 상태에 맞는 배경과 글자색을 선택한다.
 pub(super) fn draw_button(
     draw: &DRAWITEMSTRUCT,
     color: NoteColor,

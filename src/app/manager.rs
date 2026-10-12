@@ -1,3 +1,8 @@
+//! 메모 목록을 보여 주고 여러 `NoteWindow` 객체의 수명을 조정한다.
+//!
+//! `ManagerWindow`는 자신의 컨트롤과 표시 상태를 캡슐화한다. 파일 저장은 `NoteStore`, 실제
+//! 픽셀 그리기는 `manager_view`에 위임하여 창 객체가 모든 책임을 떠안지 않게 한다.
+
 use std::collections::HashMap;
 use std::ptr::{null, null_mut};
 use std::rc::Rc;
@@ -24,6 +29,7 @@ use super::win32::{
 use super::window_host::{CreateContext, MessageResult, WindowController, dispatch};
 use super::{APP_NAME, MANAGER_CLASS, SharedState, WM_NOTE_CLOSED, WM_REFRESH_NOTES};
 
+// Win32 컨트롤 ID는 WM_COMMAND 메시지에서 어떤 UI가 이벤트를 보냈는지 구분하는 식별자다.
 const ID_LIST: usize = 1001;
 const ID_SEARCH: usize = 1002;
 const ID_NEW: usize = 1003;
@@ -32,13 +38,20 @@ const ID_MANAGER_MIN: usize = 1005;
 const ID_MANAGER_CLOSE: usize = 1006;
 const ID_MANAGER_MORE: usize = 1007;
 
+/// 관리 창 하나의 상태와 동작을 소유하는 객체다.
 struct ManagerWindow {
+    /// Windows가 생성한 최상위 창 핸들이다. `attach` 호출 전에는 null이다.
     window: HWND,
+    /// 자주 접근하는 자식 컨트롤은 핸들을 캐시한다.
     list: HWND,
     search: HWND,
+    /// 모든 메모 창과 공유하는 저장소 소유권이다.
     shared: Rc<SharedState>,
+    /// 검색 결과에 현재 표시된 메모 ID만 별도로 보관한다.
     visible_ids: Vec<u64>,
+    /// 같은 메모가 중복으로 열리지 않도록 ID와 창 핸들을 연결한다.
     open_notes: HashMap<u64, HWND>,
+    /// Font와 Brush는 Drop에서 GDI 자원을 자동 해제하는 RAII 객체다.
     font: Font,
     font_medium: Font,
     font_title: Font,
@@ -47,6 +60,7 @@ struct ManagerWindow {
 }
 
 impl ManagerWindow {
+    /// 아직 Win32 핸들이 연결되지 않은 관리 창 객체를 구성한다.
     fn new(shared: Rc<SharedState>) -> Self {
         Self {
             window: null_mut(),
@@ -63,6 +77,7 @@ impl ManagerWindow {
         }
     }
 
+    /// 자식 컨트롤을 생성하고 초기 데이터와 레이아웃을 적용한다.
     fn initialize(&mut self) -> Result<(), String> {
         self.search = create_child_control(
             self.window,
@@ -82,6 +97,7 @@ impl ManagerWindow {
                 | LBS_NOINTEGRALHEIGHT as u32,
             ID_LIST,
         );
+        // 배열로 묶으면 어느 하나라도 생성에 실패했는지 동일한 방식으로 검사할 수 있다.
         let controls = [
             self.search,
             self.list,
@@ -102,6 +118,7 @@ impl ManagerWindow {
         Ok(())
     }
 
+    /// 현재 클라이언트 크기에 맞춰 모든 자식 컨트롤을 재배치한다.
     fn layout(&self) {
         let rect = client_rect(self.window);
         let width = rect.right.max(1);
@@ -139,10 +156,13 @@ impl ManagerWindow {
         );
     }
 
+    /// 검색어를 적용하여 목록 컨트롤과 `visible_ids`를 같은 순서로 다시 만든다.
     fn refresh_list(&mut self) {
         let query = window_text(self.search).to_lowercase();
         self.visible_ids.clear();
         clear_list(self.list);
+        // RefCell의 불변 빌림은 이 블록이 끝나기 전에 명시적으로 해제한다. 그 뒤 다른 메서드가
+        // 저장소를 가변로 빌릴 수 있다.
         let store = self.shared.store.borrow();
         for note in store.notes() {
             if !query.is_empty() && !note.body.to_lowercase().contains(&query) {
@@ -160,10 +180,12 @@ impl ManagerWindow {
         invalidate(self.window, false);
     }
 
+    /// 목록의 선택 인덱스를 도메인 ID로 변환한다.
     fn selected_id(&self) -> Option<u64> {
         selected_list_index(self.list).and_then(|index| self.visible_ids.get(index).copied())
     }
 
+    /// 저장소에 빈 메모를 추가한 뒤 즉시 해당 메모 창을 연다.
     fn new_note(&mut self) {
         let result = self.shared.store.borrow_mut().create_note();
         match result {
@@ -178,6 +200,7 @@ impl ManagerWindow {
         }
     }
 
+    /// 사용자 확인을 받은 뒤 열린 창과 디스크의 메모를 함께 정리한다.
     fn delete_selected(&mut self) {
         let Some(id) = self.selected_id() else {
             return;
@@ -197,6 +220,7 @@ impl ManagerWindow {
         self.refresh_list();
     }
 
+    /// 기존 창이 있으면 활성화하고, 없으면 새 `NoteWindow`를 만든다.
     fn open_note(&mut self, id: u64) {
         if let Some(window) = self.open_notes.get(&id).copied() {
             if is_window(window) {
@@ -213,6 +237,7 @@ impl ManagerWindow {
         }
     }
 
+    /// WM_COMMAND의 숫자 조합을 의미 있는 객체 메서드 호출로 변환한다.
     fn handle_command(&mut self, id: usize, notification: u32) {
         match (id, notification) {
             (ID_NEW, BN_CLICKED) => self.new_note(),
@@ -230,8 +255,11 @@ impl ManagerWindow {
     }
 }
 
+/// `CreateContext`가 객체를 소유한 상태에서 실제 Win32 창을 생성한다.
 pub(crate) fn create_window(shared: Rc<SharedState>) -> Result<HWND, String> {
     let context = CreateContext::new(ManagerWindow::new(shared));
+    // SAFETY: 문자열은 호출 동안 살아 있는 null 종료 UTF-16이고, lpParam은 같은 호출 동안
+    // 유효한 CreateContext를 가리킨다. 객체 수명 이전은 window_host가 담당한다.
     let window = unsafe {
         CreateWindowExW(
             WS_EX_APPWINDOW,
@@ -254,20 +282,28 @@ pub(crate) fn create_window(shared: Rc<SharedState>) -> Result<HWND, String> {
     Ok(window)
 }
 
+/// Windows가 요구하는 함수 포인터 형태를 객체 디스패처에 연결하는 얇은 어댑터다.
+///
+/// # Safety
+/// Windows가 등록한 창 클래스의 콜백으로만 호출해야 한다.
 pub(crate) unsafe extern "system" fn window_proc(
     window: HWND,
     message: u32,
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    // SAFETY: 네 인자는 Windows가 이 WNDPROC에 전달한 원본 값이다.
     unsafe { dispatch::<ManagerWindow>(window, message, wparam, lparam) }
 }
 
+/// 공통 창 호스트가 `ManagerWindow`를 다형적으로 다룰 수 있게 한다.
 impl WindowController for ManagerWindow {
+    /// 생성 시점에만 알 수 있는 HWND를 객체에 주입한다.
     fn attach(&mut self, window: HWND) {
         self.window = window;
     }
 
+    /// 절차적인 메시지 번호를 캡슐화된 창 동작으로 라우팅한다.
     fn handle_message(
         &mut self,
         message: u32,
@@ -314,6 +350,7 @@ impl WindowController for ManagerWindow {
                 MessageResult::Handled(self.panel_brush.handle() as LRESULT)
             }
             WM_DRAWITEM => {
+                // SAFETY: WM_DRAWITEM의 lparam은 Windows가 DRAWITEMSTRUCT 주소로 보장한다.
                 let Some(draw) = (unsafe { (lparam as *const DRAWITEMSTRUCT).as_ref() }) else {
                     return MessageResult::Handled(0);
                 };

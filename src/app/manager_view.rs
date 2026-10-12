@@ -1,3 +1,8 @@
+//! 관리 창을 그리는 표현 계층이다.
+//!
+//! 상태 변경 없이 전달받은 값만 사용하므로 렌더링과 창 동작을 분리할 수 있다. Win32의 위험한
+//! 그리기 호출은 `win32`의 안전한 래퍼 뒤에 숨겨져 있어 이 모듈은 `unsafe`를 금지한다.
+
 #![forbid(unsafe_code)]
 
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -20,12 +25,14 @@ use super::win32::{
 };
 use super::{APP_NAME, SharedState};
 
+/// 관리 창의 고정 배경, 앱 아이콘, 메모 개수를 그린다.
 pub(super) fn paint(
     window: HWND,
     visible_count: usize,
     font_title: HFONT,
     font_medium: HFONT,
 ) {
+    // `with_paint`가 BeginPaint/EndPaint 쌍을 책임지므로 호출자는 HDC 수명을 관리하지 않는다.
     with_paint(window, |hdc, rect| {
         fill_rect(hdc, &rect, MANAGER_BG);
         let icon = RECT {
@@ -75,6 +82,7 @@ pub(super) fn paint(
     });
 }
 
+/// owner-draw 목록 항목 하나를 포스트잇 카드로 그린다.
 pub(super) fn draw_note_card(
     draw: &DRAWITEMSTRUCT,
     shared: &SharedState,
@@ -88,6 +96,7 @@ pub(super) fn draw_note_card(
     let Some(id) = visible_ids.get(draw.itemID as usize).copied() else {
         return;
     };
+    // 화면을 그리는 동안에는 저장소를 읽기 전용으로만 빌린다.
     let store = shared.store.borrow();
     let Some(note) = store.note_by_id(id) else {
         return;
@@ -161,6 +170,7 @@ pub(super) fn draw_note_card(
         );
 }
 
+/// 관리 창의 일반 버튼과 제목 표시줄 버튼을 공통 방식으로 그린다.
 pub(super) fn draw_button(draw: &DRAWITEMSTRUCT, font: HFONT, header: bool) {
     let pressed = draw.itemState & ODS_SELECTED != 0;
     let color = if header {
@@ -187,6 +197,7 @@ pub(super) fn draw_button(draw: &DRAWITEMSTRUCT, font: HFONT, header: bool) {
     );
 }
 
+/// 본문의 두 번째 줄 이후를 카드 미리보기 문자열로 압축한다.
 fn note_preview(body: &str) -> String {
     let joined = body
         .lines()
@@ -205,6 +216,7 @@ fn note_preview(body: &str) -> String {
     }
 }
 
+/// 타임스탬프 기반 ID를 사람이 이해하기 쉬운 상대 시간으로 바꾼다.
 fn relative_time(id: u64) -> String {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)

@@ -1,3 +1,8 @@
+//! 개별 포스트잇 창의 편집 상태와 사용자 동작을 캡슐화한다.
+//!
+//! `NoteWindow`는 자동 저장 타이머, 선택한 색상, 고정 여부를 소유한다. Markdown 해석은
+//! `markdown`, 그리기는 `note_view`, 파일 입출력은 `NoteStore`에 위임한다.
+
 use std::ptr::{null, null_mut};
 use std::rc::Rc;
 
@@ -22,6 +27,7 @@ use super::win32::{
 use super::window_host::{CreateContext, MessageResult, WindowController, dispatch};
 use super::{NOTE_CLASS, SharedState, WM_NOTE_CLOSED, WM_REFRESH_NOTES};
 
+// 컨트롤 ID는 버튼과 편집기에서 발생한 WM_COMMAND를 객체 메서드로 연결하는 키다.
 const ID_EDITOR: usize = 2001;
 const ID_NOTE_MENU: usize = 2002;
 const ID_NOTE_MORE: usize = 2003;
@@ -41,25 +47,32 @@ const ID_COLOR_PINK: usize = 2104;
 const ID_COLOR_PURPLE: usize = 2105;
 const ID_COLOR_GRAY: usize = 2106;
 
+// 사용자가 입력을 멈춘 뒤 500ms가 지나야 저장하여 키 입력마다 디스크를 쓰지 않는다.
 const SAVE_TIMER: usize = 1;
 const SAVE_DELAY_MS: u32 = 500;
 
+/// 열린 메모 창 하나의 UI 상태와 동작을 소유한다.
 struct NoteWindow {
+    /// 현재 메모 창과 편집 컨트롤의 Win32 핸들이다.
     window: HWND,
     editor: HWND,
+    /// 저장소는 다른 창과 공유하지만 메모 ID와 UI 상태는 이 객체만 소유한다.
     shared: Rc<SharedState>,
     manager: HWND,
     note_id: u64,
     color: NoteColor,
+    /// `dirty`는 저장되지 않은 변경을, `suppress_change`는 프로그램이 넣은 텍스트를 구분한다.
     dirty: bool,
     suppress_change: bool,
     pinned: bool,
+    /// GDI 자원은 RAII 타입이므로 객체가 사라질 때 자동으로 해제된다.
     font: Font,
     font_button: Font,
     note_brush: Brush,
 }
 
 impl NoteWindow {
+    /// 저장소에서 초기 색상을 읽어 아직 HWND가 없는 창 객체를 만든다.
     fn new(shared: Rc<SharedState>, manager: HWND, note_id: u64) -> Self {
         let color = shared
             .store
@@ -84,6 +97,7 @@ impl NoteWindow {
         }
     }
 
+    /// Rich Edit과 도구 버튼을 만들고 저장된 메모를 화면에 올린다.
     fn initialize(&mut self) -> Result<(), String> {
         self.editor = create_child_control(
             self.window,
@@ -123,6 +137,7 @@ impl NoteWindow {
         Ok(())
     }
 
+    /// 창 크기에 맞춰 제목 표시줄, 편집기, 서식 도구 모음을 배치한다.
     fn layout(&self) {
         let rect = client_rect(self.window);
         let width = rect.right.max(1);
@@ -163,6 +178,7 @@ impl NoteWindow {
         );
     }
 
+    /// Markdown 원문을 저장소에서 복제한 뒤 서식이 적용된 Rich Edit 내용으로 변환한다.
     fn load(&mut self) {
         self.suppress_change = true;
         let body = self
@@ -177,6 +193,7 @@ impl NoteWindow {
         self.dirty = false;
     }
 
+    /// 사용자 편집을 더티 상태로 표시하고 디바운스 타이머를 처음부터 다시 시작한다.
     fn mark_dirty(&mut self) {
         if self.suppress_change {
             return;
@@ -185,11 +202,14 @@ impl NoteWindow {
         restart_timer(self.window, SAVE_TIMER, SAVE_DELAY_MS);
     }
 
+    /// Rich Edit의 시각적 서식을 Markdown으로 직렬화하여 저장한다.
     fn save(&mut self) {
         if !self.dirty {
             return;
         }
         let body = markdown::to_markdown(self.editor);
+        // 가변 빌림의 범위를 블록으로 제한한다. 블록이 끝나면 RefMut이 해제되어 관리자 창이
+        // 같은 저장소를 다시 읽을 수 있다.
         let result = {
             let mut store = self.shared.store.borrow_mut();
             if let Some(note) = store.note_by_id_mut(self.note_id) {
@@ -210,12 +230,14 @@ impl NoteWindow {
         notify(self.manager, WM_REFRESH_NOTES, 0);
     }
 
+    /// 항상 위 속성을 전환하고 핀 버튼을 다시 그린다.
     fn toggle_pin(&mut self) {
         self.pinned = !self.pinned;
         set_topmost(self.window, self.pinned);
         super::win32::invalidate_child(self.window, ID_NOTE_PIN, true);
     }
 
+    /// 현재 색상을 체크한 팝업 메뉴를 표시한다.
     fn show_color_menu(&mut self) {
         let items: Vec<_> = color_choices()
             .into_iter()
@@ -227,6 +249,7 @@ impl NoteWindow {
         }
     }
 
+    /// 미저장 본문을 먼저 보존한 뒤 색상 모델과 화면 자원을 함께 교체한다.
     fn set_color(&mut self, color: NoteColor) {
         if color == self.color {
             return;
@@ -244,6 +267,7 @@ impl NoteWindow {
         }
         self.color = color;
         let palette = note_palette(color);
+        // 새 Brush를 대입하면 기존 Brush의 Drop이 자동 호출되어 GDI 누수를 막는다.
         self.note_brush = Brush::new(palette.body);
         markdown::set_background(self.editor, palette.body);
         super::win32::invalidate(self.editor, true);
@@ -251,18 +275,21 @@ impl NoteWindow {
         notify(self.manager, WM_REFRESH_NOTES, 0);
     }
 
+    /// 선택 영역의 인라인 서식을 토글한다.
     fn toggle_inline(&mut self, kind: InlineFormat) {
         markdown::toggle_inline(self.editor, kind);
         focus(self.editor);
         self.mark_dirty();
     }
 
+    /// 현재 줄의 글머리표를 토글한다.
     fn toggle_bullet(&mut self) {
         markdown::toggle_bullet(self.editor);
         focus(self.editor);
         self.mark_dirty();
     }
 
+    /// 버튼/편집기 알림을 도메인 의미가 있는 메서드 호출로 변환한다.
     fn handle_command(&mut self, id: usize, notification: u32) {
         match (id, notification) {
             (ID_EDITOR, EN_CHANGE) => self.mark_dirty(),
@@ -296,12 +323,15 @@ impl NoteWindow {
     }
 }
 
+/// 특정 메모 ID를 표시하는 Win32 창을 생성한다.
 pub(crate) fn create_window(
     shared: Rc<SharedState>,
     manager: HWND,
     note_id: u64,
 ) -> Result<HWND, String> {
     let context = CreateContext::new(NoteWindow::new(shared, manager, note_id));
+    // SAFETY: lpParam은 호출 동안 살아 있는 CreateContext이며 문자열은 null 종료 UTF-16이다.
+    // 성공 시 컨트롤러 소유권은 window_host의 Rc 강한 참조로 이전된다.
     let window = unsafe {
         CreateWindowExW(
             WS_EX_TOOLWINDOW,
@@ -325,20 +355,27 @@ pub(crate) fn create_window(
     Ok(window)
 }
 
+/// Win32 콜백을 `NoteWindow` 객체의 메시지 처리로 전달하는 어댑터다.
+///
+/// # Safety
+/// Windows가 이 창 클래스에 등록한 WNDPROC로만 호출해야 한다.
 pub(crate) unsafe extern "system" fn window_proc(
     window: HWND,
     message: u32,
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    // SAFETY: 인자는 Windows가 현재 콜백에 제공한 원본 메시지 값이다.
     unsafe { dispatch::<NoteWindow>(window, message, wparam, lparam) }
 }
 
+/// 공통 창 호스트가 메모 창을 동일한 수명 규칙으로 관리하게 한다.
 impl WindowController for NoteWindow {
     fn attach(&mut self, window: HWND) {
         self.window = window;
     }
 
+    /// Win32 메시지를 편집, 저장, 그리기 같은 객체 동작으로 변환한다.
     fn handle_message(
         &mut self,
         message: u32,
@@ -375,6 +412,7 @@ impl WindowController for NoteWindow {
                 MessageResult::Handled(self.note_brush.handle() as LRESULT)
             }
             WM_DRAWITEM => {
+                // SAFETY: WM_DRAWITEM에서 lparam은 Windows가 만든 DRAWITEMSTRUCT를 가리킨다.
                 let Some(draw) = (unsafe { (lparam as *const DRAWITEMSTRUCT).as_ref() }) else {
                     return MessageResult::Handled(0);
                 };
@@ -417,6 +455,7 @@ impl WindowController for NoteWindow {
         }
     }
 
+    /// 창이 제거되면 관리 창의 `open_notes` 캐시에서도 해당 ID를 제거하도록 알린다.
     fn on_destroy(&mut self) {
         if is_window(self.manager) {
             notify(self.manager, WM_NOTE_CLOSED, self.note_id as usize);
@@ -424,6 +463,7 @@ impl WindowController for NoteWindow {
     }
 }
 
+/// 색상 메뉴 ID와 도메인 색상, 사용자 표시 문자열의 대응표다.
 fn color_choices() -> [(usize, NoteColor, &'static str); 6] {
     [
         (ID_COLOR_YELLOW, NoteColor::Yellow, "노랑"),
@@ -435,6 +475,7 @@ fn color_choices() -> [(usize, NoteColor, &'static str); 6] {
     ]
 }
 
+/// Windows 메뉴 명령 ID를 안전한 `NoteColor` 값으로 변환한다.
 fn color_from_command(id: usize) -> Option<NoteColor> {
     color_choices()
         .into_iter()

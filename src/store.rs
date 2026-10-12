@@ -1,3 +1,8 @@
+//! 메모 도메인 모델과 파일 기반 저장소를 제공한다.
+//!
+//! 이 모듈은 Windows UI를 전혀 알지 못한다. 따라서 파일 입출력과 메모 규칙을 창 없이도
+//! 단위 테스트할 수 있다.
+
 #![forbid(unsafe_code)]
 
 use std::fs;
@@ -5,6 +10,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// 화면과 디스크에서 함께 사용하는 하나의 메모다.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Note {
     pub id: u64,
@@ -12,6 +18,9 @@ pub struct Note {
     pub color: NoteColor,
 }
 
+/// 사용자가 선택할 수 있는 포스트잇 색상이다.
+///
+/// `Copy`이므로 색상 값은 소유권 이동 없이 값 자체가 복사된다.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum NoteColor {
     #[default]
@@ -24,6 +33,7 @@ pub enum NoteColor {
 }
 
 impl NoteColor {
+    /// 색상을 사람이 읽을 수 있는 안정적인 문자열로 직렬화한다.
     fn key(self) -> &'static str {
         match self {
             Self::Yellow => "yellow",
@@ -35,6 +45,7 @@ impl NoteColor {
         }
     }
 
+    /// 알 수 없는 값은 기본 색상으로 복구하여 손상된 설정 때문에 앱이 중단되지 않게 한다.
     fn from_key(value: &str) -> Self {
         match value.trim() {
             "green" => Self::Green,
@@ -47,6 +58,9 @@ impl NoteColor {
     }
 }
 
+/// 메모 컬렉션과 해당 컬렉션의 저장 경로를 함께 소유한다.
+///
+/// 외부 코드는 파일 경로를 직접 조작하지 않고 이 객체의 메서드를 통해서만 메모를 변경한다.
 #[derive(Debug)]
 pub struct NoteStore {
     root: PathBuf,
@@ -54,6 +68,7 @@ pub struct NoteStore {
 }
 
 impl NoteStore {
+    /// 저장 폴더를 열고 기존 메모를 메모리로 읽어 들인다.
     pub fn open(root: PathBuf) -> io::Result<Self> {
         fs::create_dir_all(&root)?;
         let mut notes = Vec::new();
@@ -81,6 +96,8 @@ impl NoteStore {
             });
         }
 
+        // 최신 ID가 앞에 오도록 정렬한다. `sort_unstable_by`는 동일 ID의 순서를 보장할 필요가
+        // 없는 대신 추가 메모리를 적게 사용하는 정렬이다.
         notes.sort_unstable_by(|left, right| right.id.cmp(&left.id));
         let mut store = Self { root, notes };
         if store.notes.is_empty() {
@@ -89,22 +106,29 @@ impl NoteStore {
         Ok(store)
     }
 
+    /// 현재 메모를 읽기 전용 슬라이스로 노출한다.
+    /// `&[Note]`는 호출자가 벡터의 크기나 원소를 직접 변경하지 못하게 한다.
     pub fn notes(&self) -> &[Note] {
         &self.notes
     }
 
+    /// ID를 통해 불변 메모 참조를 찾는다.
     pub fn note_by_id(&self, id: u64) -> Option<&Note> {
         self.notes.iter().find(|note| note.id == id)
     }
 
+    /// ID를 통해 가변 메모 참조를 찾는다.
+    /// 반환된 `&mut Note`가 살아 있는 동안에는 같은 저장소를 다른 방식으로 빌릴 수 없다.
     pub fn note_by_id_mut(&mut self, id: u64) -> Option<&mut Note> {
         self.notes.iter_mut().find(|note| note.id == id)
     }
 
+    /// ID에 대응하는 벡터 인덱스를 찾는다.
     pub fn index_of(&self, id: u64) -> Option<usize> {
         self.notes.iter().position(|note| note.id == id)
     }
 
+    /// 새 메모를 만들고 저장한 뒤 컬렉션에서의 인덱스를 반환한다.
     pub fn create_note(&mut self) -> io::Result<usize> {
         let mut id = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -124,6 +148,7 @@ impl NoteStore {
         Ok(0)
     }
 
+    /// 인덱스로 선택한 메모를 디스크에 저장한다.
     pub fn save(&self, index: usize) -> io::Result<()> {
         let note = self.notes.get(index).ok_or_else(|| {
             io::Error::new(io::ErrorKind::NotFound, "note index does not exist")
@@ -131,6 +156,7 @@ impl NoteStore {
         self.write(note)
     }
 
+    /// 색상을 메모리와 디스크에 동시에 반영한다.
     pub fn set_color(&mut self, id: u64, color: NoteColor) -> io::Result<()> {
         let note = self.note_by_id_mut(id).ok_or_else(|| {
             io::Error::new(io::ErrorKind::NotFound, "note id does not exist")
@@ -140,6 +166,7 @@ impl NoteStore {
         self.write_color(&note)
     }
 
+    /// 메모 파일과 색상 보조 파일을 함께 삭제한다.
     pub fn delete(&mut self, index: usize) -> io::Result<usize> {
         if index >= self.notes.len() {
             return Err(io::Error::new(
@@ -166,6 +193,7 @@ impl NoteStore {
         Ok(index.min(self.notes.len() - 1))
     }
 
+    /// 임시 파일을 완성한 뒤 최종 파일명으로 바꾸어 중간 상태의 노출을 줄인다.
     fn write(&self, note: &Note) -> io::Result<()> {
         let final_path = self.path_for(note.id);
         let temporary_path = final_path.with_extension("tmp");
@@ -177,6 +205,7 @@ impl NoteStore {
         self.write_color(note)
     }
 
+    /// 본문과 별개인 `.color` 보조 파일에 색상을 저장한다.
     fn write_color(&self, note: &Note) -> io::Result<()> {
         let final_path = color_path(&self.root, note.id);
         if fs::read_to_string(&final_path)
@@ -193,15 +222,18 @@ impl NoteStore {
         fs::rename(temporary_path, final_path)
     }
 
+    /// 숫자 ID를 고정 폭 파일명으로 변환한다.
     fn path_for(&self, id: u64) -> PathBuf {
         self.root.join(format!("{id:020}.txt"))
     }
 }
 
+/// 색상 보조 파일의 경로를 계산하는 순수 함수다.
 fn color_path(root: &Path, id: u64) -> PathBuf {
     root.join(format!("{id:020}.color"))
 }
 
+/// 환경 변수 또는 Windows 사용자 데이터 폴더에서 기본 저장 위치를 계산한다.
 pub fn default_data_dir() -> PathBuf {
     if let Some(path) = std::env::var_os("FEATHER_NOTES_DATA_DIR") {
         return PathBuf::from(path);
@@ -213,6 +245,7 @@ pub fn default_data_dir() -> PathBuf {
         .join("notes")
 }
 
+/// 목록 카드에 표시할 첫 번째 비어 있지 않은 줄을 유니코드 문자 기준으로 자른다.
 pub fn note_title(body: &str) -> String {
     let title = body
         .lines()
@@ -230,6 +263,7 @@ pub fn note_title(body: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    // 테스트는 실제 사용자 폴더 대신 프로세스별 임시 경로를 사용한다.
     use super::*;
 
     fn temporary_store() -> PathBuf {

@@ -1,3 +1,4 @@
+# Cargo가 빌드할 패키지의 기본 메타데이터다.
 [package]
 name = "feather-notes"
 version = "0.1.0"
@@ -5,6 +6,7 @@ edition = "2024"
 description = "A tiny native Windows sticky-notes replacement"
 license = "MIT"
 
+# `windows-sys`는 Win32 API를 거의 그대로 노출한다. 필요한 기능만 선택해 바인딩 범위를 줄인다.
 [dependencies]
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
@@ -16,9 +18,15 @@ windows-sys = { version = "0.61", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 
+# 작은 단일 실행 파일을 만들기 위한 릴리스 최적화 설정이다.
 [profile.release]
+# 코드 생성 단위를 하나로 합쳐 전체 프로그램 최적화 기회를 늘린다.
 codegen-units = 1
+# 크레이트 경계를 넘어 최적화하는 링크 타임 최적화다.
 lto = true
+# 실행 속도보다 바이너리 크기를 우선한다.
 opt-level = "z"
+# 패닉 시 스택 되감기 코드를 제외한다.
 panic = "abort"
+# 최종 실행 파일에서 심볼 정보를 제거한다.
 strip = "symbols"
