@@ -1,41 +1,59 @@
 # Feather Notes
 
-스티커 메모를 대신하는 초경량 Windows 메모 앱입니다. 브라우저 런타임이나 무거운 GUI 프레임워크 없이 Rust와 Win32 시스템 컨트롤만 사용해 메모리 사용량을 작게 유지합니다.
+Feather Notes는 Rust와 Win32로 만든 가벼운 Windows 스티커 메모 앱입니다. 브라우저 런타임이나
+별도의 GUI 프레임워크 없이 네이티브 Windows 컨트롤을 사용합니다.
 
-## 기능
+## 주요 기능
 
-- 여러 메모 생성, 선택, 삭제
-- 입력 후 350ms가 지나면 자동 저장
-- 창을 다른 창 위에 고정하는 토글
-- UTF-8 일반 텍스트 파일 저장
-- 설치 프로그램과 계정, 네트워크 연결이 필요 없는 단일 실행 파일
+- 메모 목록 검색, 생성, 열기, 삭제
+- 여러 메모를 각각 독립된 창으로 표시
+- 입력이 500ms 동안 멈추면 자동 저장하는 디바운스 저장
+- 굵게, 기울임, 밑줄, 취소선, 글머리표 서식
+- 화면에는 서식이 적용된 문장을 표시하고 파일에는 Markdown으로 저장
+- 노랑, 초록, 파랑, 분홍, 보라, 회색 메모 색상
+- 메모 창 항상 위 고정
+- Windows 150% 배율을 포함한 Per-Monitor DPI Aware V2 지원
+- UTF-8 텍스트 파일 기반의 로컬 저장
 
-메모는 `%LOCALAPPDATA%\FeatherNotes\notes`에 개별 `.txt` 파일로 저장됩니다. 앱이 종료되어도 다른 편집기로 내용을 읽거나 백업할 수 있습니다.
+## 다운로드
 
-테스트나 휴대용 실행처럼 저장 위치를 바꿔야 할 때는 실행 전에 `FEATHER_NOTES_DATA_DIR` 환경 변수를 원하는 폴더로 지정할 수 있습니다.
+[최신 GitHub Release](https://github.com/hakunamta00700/light-sticky-notes/releases/latest)에서
+`feather-notes-v0.1.0-windows-x86_64.exe`를 내려받아 실행합니다. 설치 과정은 필요하지 않습니다.
 
-## 기술 스택과 저메모리 원칙
-
-- Rust 2024 edition
-- `windows-sys`를 통한 Win32 API 직접 사용
-- 운영체제가 제공하는 ListBox, Edit, Button 컨트롤 재사용
-- 메모를 읽기 쉬운 개별 텍스트 파일로 저장해 데이터베이스 엔진 미사용
-- 릴리스 빌드에 LTO, 크기 최적화, 심볼 제거 적용
-
-## 사전 요구 사항
-
-- Windows 10 또는 Windows 11
-- Rust 1.85 이상과 Cargo
-
-## 실행
+현재 실행 파일은 코드 서명이 되어 있지 않으므로 Windows SmartScreen 경고가 표시될 수 있습니다.
+릴리스에 함께 제공되는 SHA-256 파일로 다운로드한 바이너리를 검증할 수 있습니다.
 
 ```powershell
-cargo run --release
+Get-FileHash .\feather-notes-v0.1.0-windows-x86_64.exe -Algorithm SHA256
 ```
 
-릴리스 실행 파일은 `target\release\feather-notes.exe`에 생성됩니다.
+## 데이터 저장 위치
 
-## 테스트와 검사
+메모는 다음 경로에 개별 텍스트 파일로 저장됩니다.
+
+```text
+%LOCALAPPDATA%\FeatherNotes\notes
+```
+
+실행 파일과 메모 데이터가 분리되어 있으므로 앱을 교체하거나 업데이트해도 기존 메모가 유지됩니다.
+테스트용 저장 위치가 필요하면 실행 전에 `FEATHER_NOTES_DATA_DIR` 환경 변수를 지정할 수 있습니다.
+
+## 직접 빌드
+
+요구 사항:
+
+- Windows 10 또는 Windows 11 x64
+- 최신 Rust stable 툴체인
+
+```powershell
+git clone https://github.com/hakunamta00700/light-sticky-notes.git
+cd light-sticky-notes
+cargo build --release
+```
+
+완성된 실행 파일은 `target\release\feather-notes.exe`에 생성됩니다.
+
+## 검증
 
 ```powershell
 cargo fmt --check
@@ -44,22 +62,23 @@ cargo clippy --all-targets -- -D warnings
 cargo build --release
 ```
 
-실행 중인 앱의 실제 메모리를 확인하려면 다음 명령을 사용할 수 있습니다.
+GitHub Actions의 Windows CI도 같은 검증을 실행하고 릴리스 빌드를 아티팩트로 제공합니다.
 
-```powershell
-Get-Process feather-notes | Select-Object ProcessName, `
-  @{Name='WorkingSetMB'; Expression={[math]::Round($_.WorkingSet64 / 1MB, 2)}}, `
-  @{Name='PrivateMB'; Expression={[math]::Round($_.PrivateMemorySize64 / 1MB, 2)}}
-```
+## 코드 구조
 
-운영체제 버전, 글꼴 캐시, 보안 프로그램에 따라 측정값은 달라질 수 있으므로 고정된 수치를 보장하기보다 릴리스 빌드를 같은 조건에서 비교하는 것이 좋습니다.
+- `src/app/manager.rs`: 메모 목록 창 객체와 동작
+- `src/app/note.rs`: 개별 메모 창 객체와 자동 저장
+- `src/app/window_host.rs`: Win32 메시지와 `WindowController` 객체 연결
+- `src/app/win32.rs`: Win32 FFI 안전 래퍼, DPI 값 객체, RAII 자원
+- `src/app/markdown.rs`: Rich Edit와 Markdown 사이의 변환
+- `src/store.rs`: 파일 저장과 메모 도메인 모델
 
-현재 개발 환경의 2026-10-09 기준 스모크 테스트에서는 빈 메모 1개를 연 릴리스 빌드가 Working Set 8.95MB, Private Memory 1.84MB, 134 handles를 사용했고 실행 파일 크기는 276KB였습니다. 이는 성능 기준선이지 모든 PC에서의 보장값은 아닙니다.
+프로젝트는 안전한 Rust를 기본으로 하며, 불가피한 `unsafe`는 Win32 FFI 경계에 제한합니다.
 
-## 배포
+## 개인정보 및 네트워크
 
-`cargo build --release` 후 생성된 `target\release\feather-notes.exe` 하나를 복사해 실행하면 됩니다. 사용자 메모는 실행 파일과 분리되어 로컬 앱 데이터 폴더에 남습니다.
+Feather Notes는 메모를 로컬 파일에만 저장하며 메모 내용을 외부 서버로 전송하지 않습니다.
 
 ## 라이선스
 
-MIT
+[MIT License](LICENSE)
