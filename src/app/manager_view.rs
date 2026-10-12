@@ -21,7 +21,7 @@ use super::theme::{
     ACCENT, MANAGER_BG, MUTED, PANEL_BG, PANEL_HOVER, TEXT, note_palette, rgb,
 };
 use super::win32::{
-    draw_text, fill_rect, fill_round_rect, stroke_round_rect, window_text, with_paint,
+    Dpi, draw_text, fill_rect, fill_round_rect, stroke_round_rect, window_text, with_paint,
 };
 use super::{APP_NAME, SharedState};
 
@@ -31,36 +31,38 @@ pub(super) fn paint(
     visible_count: usize,
     font_title: HFONT,
     font_medium: HFONT,
+    dpi: Dpi,
 ) {
     // `with_paint`가 BeginPaint/EndPaint 쌍을 책임지므로 호출자는 HDC 수명을 관리하지 않는다.
     with_paint(window, |hdc, rect| {
+        let scale = |value| dpi.scale(value);
         fill_rect(hdc, &rect, MANAGER_BG);
         let icon = RECT {
-            left: 28,
-            top: 29,
-            right: 50,
-            bottom: 53,
+            left: scale(28),
+            top: scale(29),
+            right: scale(50),
+            bottom: scale(53),
         };
-        fill_round_rect(hdc, &icon, ACCENT, 6);
+        fill_round_rect(hdc, &icon, ACCENT, scale(6));
         fill_round_rect(
             hdc,
             &RECT {
-                left: 40,
-                top: 41,
-                right: 50,
-                bottom: 53,
+                left: scale(40),
+                top: scale(41),
+                right: scale(50),
+                bottom: scale(53),
             },
             rgb(240, 112, 48),
-            3,
+            scale(3),
         );
         draw_text(
             hdc,
             APP_NAME,
             RECT {
-                left: 62,
-                top: 22,
-                right: 280,
-                bottom: 58,
+                left: scale(62),
+                top: scale(22),
+                right: scale(280),
+                bottom: scale(58),
             },
             font_title,
             TEXT,
@@ -70,10 +72,10 @@ pub(super) fn paint(
             hdc,
             &format!("메모 {visible_count}개"),
             RECT {
-                left: 24,
-                top: 176,
-                right: 180,
-                bottom: 206,
+                left: scale(24),
+                top: scale(176),
+                right: scale(180),
+                bottom: scale(206),
             },
             font_medium,
             TEXT,
@@ -89,6 +91,7 @@ pub(super) fn draw_note_card(
     visible_ids: &[u64],
     font: HFONT,
     font_medium: HFONT,
+    dpi: Dpi,
 ) {
     if draw.itemID == u32::MAX {
         return;
@@ -103,40 +106,41 @@ pub(super) fn draw_note_card(
     };
     let palette = note_palette(note.color);
     let selected = draw.itemState & ODS_SELECTED != 0;
+    let scale = |value| dpi.scale(value);
     let mut card = draw.rcItem;
-    card.top += 5;
-    card.bottom -= 7;
-    card.right -= 4;
+    card.top += scale(5);
+    card.bottom -= scale(7);
+    card.right -= scale(4);
     let rendered_body = markdown::plain_text(&note.body);
     fill_round_rect(
-            draw.hDC,
-            &card,
-            if selected {
-                palette.selected
-            } else {
-                palette.card
-            },
-            14,
-        );
+        draw.hDC,
+        &card,
+        if selected {
+            palette.selected
+        } else {
+            palette.card
+        },
+        scale(14),
+    );
     fill_round_rect(
-            draw.hDC,
-            &RECT {
-                left: card.left,
-                top: card.top,
-                right: card.right,
-                bottom: card.top + 6,
-            },
-            palette.top,
-            6,
-        );
+        draw.hDC,
+        &RECT {
+            left: card.left,
+            top: card.top,
+            right: card.right,
+            bottom: card.top + scale(6),
+        },
+        palette.top,
+        scale(6),
+    );
     draw_text(
             draw.hDC,
             &note_title(&rendered_body),
             RECT {
-                left: card.left + 24,
-                top: card.top + 22,
-                right: card.right - 96,
-                bottom: card.top + 52,
+                left: card.left + scale(24),
+                top: card.top + scale(22),
+                right: card.right - scale(96),
+                bottom: card.top + scale(52),
             },
             font_medium,
             TEXT,
@@ -146,10 +150,10 @@ pub(super) fn draw_note_card(
             draw.hDC,
             &relative_time(note.id),
             RECT {
-                left: card.right - 110,
-                top: card.top + 22,
-                right: card.right - 18,
-                bottom: card.top + 52,
+                left: card.right - scale(110),
+                top: card.top + scale(22),
+                right: card.right - scale(18),
+                bottom: card.top + scale(52),
             },
             font,
             TEXT,
@@ -159,10 +163,10 @@ pub(super) fn draw_note_card(
             draw.hDC,
             &note_preview(&rendered_body),
             RECT {
-                left: card.left + 24,
-                top: card.top + 61,
-                right: card.right - 20,
-                bottom: card.bottom - 13,
+                left: card.left + scale(24),
+                top: card.top + scale(61),
+                right: card.right - scale(20),
+                bottom: card.bottom - scale(13),
             },
             font,
             MUTED,
@@ -171,7 +175,7 @@ pub(super) fn draw_note_card(
 }
 
 /// 관리 창의 일반 버튼과 제목 표시줄 버튼을 공통 방식으로 그린다.
-pub(super) fn draw_button(draw: &DRAWITEMSTRUCT, font: HFONT, header: bool) {
+pub(super) fn draw_button(draw: &DRAWITEMSTRUCT, font: HFONT, header: bool, dpi: Dpi) {
     let pressed = draw.itemState & ODS_SELECTED != 0;
     let color = if header {
         if pressed { PANEL_BG } else { MANAGER_BG }
@@ -183,8 +187,8 @@ pub(super) fn draw_button(draw: &DRAWITEMSTRUCT, font: HFONT, header: bool) {
     if header {
         fill_rect(draw.hDC, &draw.rcItem, color);
     } else {
-        fill_round_rect(draw.hDC, &draw.rcItem, color, 10);
-        stroke_round_rect(draw.hDC, &draw.rcItem, rgb(82, 83, 80), 10);
+        fill_round_rect(draw.hDC, &draw.rcItem, color, dpi.scale(10));
+        stroke_round_rect(draw.hDC, &draw.rcItem, rgb(82, 83, 80), dpi.scale(10));
     }
     let label = window_text(draw.hwndItem);
     draw_text(

@@ -12,10 +12,84 @@ use windows_sys::Win32::Graphics::Dwm::{
 };
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, LoadLibraryW};
+use windows_sys::Win32::UI::HiDpi::{
+    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForSystem, GetDpiForWindow,
+    SetProcessDpiAwarenessContext,
+};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 use super::APP_NAME;
+
+/// Windows의 기본 논리 DPI다. 화면 배율 100%가 96 DPI에 해당한다.
+const DEFAULT_DPI: u32 = 96;
+
+/// 논리 픽셀을 현재 모니터의 물리 픽셀로 바꾸는 DPI 값 객체다.
+///
+/// 화면 치수를 단순한 `i32`로 흩어 놓지 않고 이 타입을 통과시키면, 어떤 값이 100% 배율을
+/// 기준으로 작성되었는지 코드에서 분명하게 드러난다.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Dpi(u32);
+
+impl Dpi {
+    /// 주 모니터의 DPI를 읽는다. Windows가 0을 반환하는 예외 상황에는 96 DPI를 사용한다.
+    pub(crate) fn system() -> Self {
+        // SAFETY: 인자가 없고 Windows가 프로세스의 시스템 DPI 값을 복사해 반환한다.
+        Self(unsafe { GetDpiForSystem() }.max(DEFAULT_DPI))
+    }
+
+    /// 이미 생성된 창이 현재 놓인 모니터의 DPI를 읽는다.
+    pub(crate) fn for_window(window: HWND) -> Self {
+        // SAFETY: 호출자는 생성이 끝난 유효한 HWND를 전달한다.
+        Self(unsafe { GetDpiForWindow(window) }.max(DEFAULT_DPI))
+    }
+
+    /// `WM_DPICHANGED`의 `wParam` 하위 단어에 담긴 새 가로 DPI를 값 객체로 만든다.
+    pub(crate) fn from_message(wparam: WPARAM) -> Self {
+        Self(((wparam & 0xffff) as u32).max(DEFAULT_DPI))
+    }
+
+    /// 96 DPI 기준의 논리 픽셀을 현재 배율의 물리 픽셀로 반올림한다.
+    pub(crate) fn scale(self, logical_pixels: i32) -> i32 {
+        let scaled = i64::from(logical_pixels) * i64::from(self.0);
+        let rounded = if scaled >= 0 {
+            scaled + i64::from(DEFAULT_DPI / 2)
+        } else {
+            scaled - i64::from(DEFAULT_DPI / 2)
+        };
+        (rounded / i64::from(DEFAULT_DPI)) as i32
+    }
+}
+
+/// Windows가 창 전체를 비트맵으로 확대하지 않도록 프로세스를 모니터별 DPI 인식 모드로 바꾼다.
+///
+/// 창이나 GDI 자원을 만들기 전에 한 번 호출해야 한다. 실패하더라도 기존 DPI 모드로 실행할 수
+/// 있으므로 결과는 오류로 승격하지 않는다.
+pub(crate) fn enable_per_monitor_dpi_awareness() {
+    // SAFETY: Windows가 정의한 의사 핸들 상수를 전달하며, UI 생성 전 단일 스레드에서 호출한다.
+    unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
+}
+
+/// `WM_DPICHANGED`가 제안한 위치와 크기를 창에 적용한다.
+pub(crate) fn apply_dpi_suggested_rect(window: HWND, lparam: LPARAM) {
+    // SAFETY: 이 함수는 WM_DPICHANGED 처리 중에만 호출되므로 lparam은 Windows가 소유한 RECT를
+    // 가리킨다. RECT는 SetWindowPos 호출이 끝날 때까지만 읽고 보관하지 않는다.
+    let Some(rect) = (unsafe { (lparam as *const RECT).as_ref() }) else {
+        return;
+    };
+    // SAFETY: window는 메시지를 받은 유효한 HWND이고, 계산한 너비와 높이는 RECT에서 얻었다.
+    unsafe {
+        SetWindowPos(
+            window,
+            null_mut(),
+            rect.left,
+            rect.top,
+            rect.right - rect.left,
+            rect.bottom - rect.top,
+            SWP_NOACTIVATE | SWP_NOZORDER,
+        )
+    };
+}
 
 /// 창 클래스 이름과 콜백을 Windows에 등록한다.
 pub(crate) fn register_class(name: &str, procedure: WNDPROC) -> Result<(), String> {
@@ -40,7 +114,12 @@ pub(crate) fn register_class(name: &str, procedure: WNDPROC) -> Result<(), Strin
 
 /// 마우스 위치가 테두리, 제목 표시줄, 본문 중 어디인지 판정한다.
 /// 반환값을 통해 기본 테두리 없이도 이동과 크기 조절이 가능하다.
-pub(crate) fn hit_test(window: HWND, lparam: LPARAM, title_height: i32) -> LRESULT {
+pub(crate) fn hit_test(
+    window: HWND,
+    lparam: LPARAM,
+    title_height: i32,
+    resize_edge: i32,
+) -> LRESULT {
     let mut point = POINT {
         x: (lparam as i16) as i32,
         y: ((lparam >> 16) as i16) as i32,
@@ -49,7 +128,7 @@ pub(crate) fn hit_test(window: HWND, lparam: LPARAM, title_height: i32) -> LRESU
     unsafe { ScreenToClient(window, &mut point) };
     let mut rect = RECT::default();
     unsafe { GetClientRect(window, &mut rect) };
-    let edge = 7;
+    let edge = resize_edge;
     if point.y < edge && point.x < edge {
         return HTTOPLEFT as LRESULT;
     }
@@ -375,11 +454,11 @@ pub(crate) struct Font(HFONT);
 
 impl Font {
     /// Segoe UI 폰트를 만들고 반환된 핸들을 소유한다.
-    pub(crate) fn new(size: i32, weight: i32, italic: bool) -> Self {
+    pub(crate) fn new(size: i32, weight: i32, italic: bool, dpi: Dpi) -> Self {
         // SAFETY: 모든 인자는 값이며 face name 버퍼는 동기 호출 동안 유효하다.
         Self(unsafe {
             CreateFontW(
-                -size,
+                -dpi.scale(size),
                 0,
                 0,
                 0,
@@ -592,4 +671,23 @@ pub(crate) fn with_paint(window: HWND, draw: impl FnOnce(HDC, RECT)) {
 /// Rust UTF-8 문자열을 Win32가 기대하는 null 종료 UTF-16 버퍼로 변환한다.
 pub(crate) fn wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Dpi;
+
+    #[test]
+    fn scales_logical_pixels_for_common_windows_zoom_levels() {
+        assert_eq!(Dpi(96).scale(100), 100);
+        assert_eq!(Dpi(120).scale(100), 125);
+        assert_eq!(Dpi(144).scale(100), 150);
+        assert_eq!(Dpi(192).scale(100), 200);
+    }
+
+    #[test]
+    fn rounds_scaled_pixels_symmetrically() {
+        assert_eq!(Dpi(144).scale(1), 2);
+        assert_eq!(Dpi(144).scale(-1), -2);
+    }
 }

@@ -20,11 +20,12 @@ use super::markdown;
 use super::note;
 use super::theme::{MANAGER_BG, PANEL_BG, TEXT};
 use super::win32::{
-    Brush, Font, add_list_item, clear_list, client_rect, close_window, configure_list, confirm,
-    create_child_control, create_owner_button, disable_native_border, finish_list_update,
-    hit_test, invalidate, is_window, minimize, move_child, move_window, restore_and_activate,
-    quit_message_loop, select_list_item, selected_list_index, set_control_font, set_cue_banner,
-    set_dc_colors, set_min_track_size, show_error, wide, window_text,
+    Brush, Dpi, Font, add_list_item, apply_dpi_suggested_rect, clear_list, client_rect,
+    close_window, configure_list, confirm, create_child_control, create_owner_button,
+    disable_native_border, finish_list_update, hit_test, invalidate, is_window, minimize,
+    move_child, move_window, restore_and_activate, quit_message_loop, select_list_item,
+    selected_list_index, set_control_font, set_cue_banner, set_dc_colors,
+    set_min_track_size, show_error, wide, window_text,
 };
 use super::window_host::{CreateContext, MessageResult, WindowController, dispatch};
 use super::{APP_NAME, MANAGER_CLASS, SharedState, WM_NOTE_CLOSED, WM_REFRESH_NOTES};
@@ -51,6 +52,8 @@ struct ManagerWindow {
     visible_ids: Vec<u64>,
     /// 같은 메모가 중복으로 열리지 않도록 ID와 창 핸들을 연결한다.
     open_notes: HashMap<u64, HWND>,
+    /// 현재 창이 놓인 모니터의 배율을 보관하여 모든 논리 치수에 동일하게 적용한다.
+    dpi: Dpi,
     /// Font와 Brush는 Drop에서 GDI 자원을 자동 해제하는 RAII 객체다.
     font: Font,
     font_medium: Font,
@@ -61,7 +64,7 @@ struct ManagerWindow {
 
 impl ManagerWindow {
     /// 아직 Win32 핸들이 연결되지 않은 관리 창 객체를 구성한다.
-    fn new(shared: Rc<SharedState>) -> Self {
+    fn new(shared: Rc<SharedState>, dpi: Dpi) -> Self {
         Self {
             window: null_mut(),
             list: null_mut(),
@@ -69,9 +72,10 @@ impl ManagerWindow {
             shared,
             visible_ids: Vec::new(),
             open_notes: HashMap::new(),
-            font: Font::new(18, FW_NORMAL as i32, false),
-            font_medium: Font::new(18, FW_SEMIBOLD as i32, false),
-            font_title: Font::new(20, FW_SEMIBOLD as i32, false),
+            dpi,
+            font: Font::new(18, FW_NORMAL as i32, false, dpi),
+            font_medium: Font::new(18, FW_SEMIBOLD as i32, false, dpi),
+            font_title: Font::new(20, FW_SEMIBOLD as i32, false, dpi),
             background_brush: Brush::new(MANAGER_BG),
             panel_brush: Brush::new(PANEL_BG),
         }
@@ -112,7 +116,7 @@ impl ManagerWindow {
         }
         set_control_font(self.search, self.font.handle());
         set_cue_banner(self.search, "메모 검색");
-        configure_list(self.list, 126);
+        configure_list(self.list, self.dpi.scale(126) as isize);
         self.refresh_list();
         self.layout();
         Ok(())
@@ -123,14 +127,36 @@ impl ManagerWindow {
         let rect = client_rect(self.window);
         let width = rect.right.max(1);
         let height = rect.bottom.max(1);
-        let margin = 24;
-        let action_y = 88;
-        let action_height = 60;
-        let gap = 10;
+        let scale = |value| self.dpi.scale(value);
+        let margin = scale(24);
+        let action_y = scale(88);
+        let action_height = scale(60);
+        let gap = scale(10);
         let action_width = ((width - margin * 2 - gap) / 2).max(1);
-        move_child(self.window, ID_MANAGER_MORE, width - 160, 12, 48, 44);
-        move_child(self.window, ID_MANAGER_MIN, width - 108, 12, 48, 44);
-        move_child(self.window, ID_MANAGER_CLOSE, width - 56, 12, 48, 44);
+        move_child(
+            self.window,
+            ID_MANAGER_MORE,
+            width - scale(160),
+            scale(12),
+            scale(48),
+            scale(44),
+        );
+        move_child(
+            self.window,
+            ID_MANAGER_MIN,
+            width - scale(108),
+            scale(12),
+            scale(48),
+            scale(44),
+        );
+        move_child(
+            self.window,
+            ID_MANAGER_CLOSE,
+            width - scale(56),
+            scale(12),
+            scale(48),
+            scale(44),
+        );
         move_child(self.window, ID_NEW, margin, action_y, action_width, action_height);
         move_child(
             self.window,
@@ -142,18 +168,37 @@ impl ManagerWindow {
         );
         move_window(
             self.search,
-            (width - 220).max(180),
-            action_y + action_height + 24,
-            196,
-            40,
+            (width - scale(220)).max(scale(180)),
+            action_y + action_height + scale(24),
+            scale(196),
+            scale(40),
         );
         move_window(
             self.list,
             margin,
-            action_y + action_height + 80,
+            action_y + action_height + scale(80),
             width - margin * 2,
-            (height - action_y - action_height - 100).max(1),
+            (height - action_y - action_height - scale(100)).max(1),
         );
+    }
+
+    /// 모니터 배율이 바뀌면 배율 의존 GDI 자원과 자식 컨트롤 배치를 함께 갱신한다.
+    fn update_dpi(&mut self, dpi: Dpi) {
+        if self.dpi == dpi {
+            return;
+        }
+        self.dpi = dpi;
+        let font = Font::new(18, FW_NORMAL as i32, false, dpi);
+        let font_medium = Font::new(18, FW_SEMIBOLD as i32, false, dpi);
+        let font_title = Font::new(20, FW_SEMIBOLD as i32, false, dpi);
+        // 컨트롤이 새 핸들을 먼저 참조하게 한 뒤 필드를 교체해야 이전 폰트가 너무 일찍 해제되지 않는다.
+        set_control_font(self.search, font.handle());
+        self.font = font;
+        self.font_medium = font_medium;
+        self.font_title = font_title;
+        configure_list(self.list, dpi.scale(126) as isize);
+        self.layout();
+        invalidate(self.window, true);
     }
 
     /// 검색어를 적용하여 목록 컨트롤과 `visible_ids`를 같은 순서로 다시 만든다.
@@ -257,7 +302,8 @@ impl ManagerWindow {
 
 /// `CreateContext`가 객체를 소유한 상태에서 실제 Win32 창을 생성한다.
 pub(crate) fn create_window(shared: Rc<SharedState>) -> Result<HWND, String> {
-    let context = CreateContext::new(ManagerWindow::new(shared));
+    let dpi = Dpi::system();
+    let context = CreateContext::new(ManagerWindow::new(shared, dpi));
     // SAFETY: 문자열은 호출 동안 살아 있는 null 종료 UTF-16이고, lpParam은 같은 호출 동안
     // 유효한 CreateContext를 가리킨다. 객체 수명 이전은 window_host가 담당한다.
     let window = unsafe {
@@ -268,8 +314,8 @@ pub(crate) fn create_window(shared: Rc<SharedState>) -> Result<HWND, String> {
             WS_POPUP | WS_THICKFRAME | WS_MINIMIZEBOX,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
-            560,
-            760,
+            dpi.scale(560),
+            dpi.scale(760),
             null_mut(),
             null_mut(),
             GetModuleHandleW(null()),
@@ -313,6 +359,7 @@ impl WindowController for ManagerWindow {
         match message {
             WM_CREATE => {
                 disable_native_border(self.window);
+                self.update_dpi(Dpi::for_window(self.window));
                 match self.initialize() {
                     Ok(()) => MessageResult::Handled(0),
                     Err(error) => {
@@ -324,7 +371,12 @@ impl WindowController for ManagerWindow {
             WM_NCCALCSIZE => MessageResult::Handled(0),
             WM_NCPAINT => MessageResult::Handled(0),
             WM_NCACTIVATE => MessageResult::Handled(1),
-            WM_NCHITTEST => MessageResult::Handled(hit_test(self.window, lparam, 68)),
+            WM_NCHITTEST => MessageResult::Handled(hit_test(
+                self.window,
+                lparam,
+                self.dpi.scale(68),
+                self.dpi.scale(7),
+            )),
             WM_SIZE => {
                 self.layout();
                 MessageResult::Handled(0)
@@ -335,6 +387,7 @@ impl WindowController for ManagerWindow {
                     self.visible_ids.len(),
                     self.font_title.handle(),
                     self.font_medium.handle(),
+                    self.dpi,
                 );
                 MessageResult::Handled(0)
             }
@@ -361,13 +414,14 @@ impl WindowController for ManagerWindow {
                         &self.visible_ids,
                         self.font.handle(),
                         self.font_medium.handle(),
+                        self.dpi,
                     )
                 } else {
                     let header = matches!(
                         draw.CtlID as usize,
                         ID_MANAGER_MIN | ID_MANAGER_CLOSE | ID_MANAGER_MORE
                     );
-                    manager_view::draw_button(draw, self.font.handle(), header)
+                    manager_view::draw_button(draw, self.font.handle(), header, self.dpi)
                 }
                 MessageResult::Handled(1)
             }
@@ -386,7 +440,12 @@ impl WindowController for ManagerWindow {
                 MessageResult::Handled(0)
             }
             WM_GETMINMAXINFO => {
-                set_min_track_size(lparam, 440, 540);
+                set_min_track_size(lparam, self.dpi.scale(440), self.dpi.scale(540));
+                MessageResult::Handled(0)
+            }
+            WM_DPICHANGED => {
+                self.update_dpi(Dpi::from_message(wparam));
+                apply_dpi_suggested_rect(self.window, lparam);
                 MessageResult::Handled(0)
             }
             WM_CLOSE => MessageResult::Destroy,

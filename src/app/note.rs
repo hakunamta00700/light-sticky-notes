@@ -18,11 +18,12 @@ use super::markdown::{self, InlineFormat};
 use super::note_view::{self, ButtonKind};
 use super::theme::{TEXT, note_palette};
 use super::win32::{
-    Brush, Font, client_rect, close_window, create_child_control, create_owner_button,
-    disable_native_border, focus, hit_test, is_window, minimize, move_child, move_window,
-    notify, restart_timer, restore_and_activate, set_control_font, set_cue_banner,
-    set_dc_colors, set_min_track_size, set_topmost, show_and_update, show_error,
-    show_popup_menu, stop_timer, wide,
+    Brush, Dpi, Font, apply_dpi_suggested_rect, client_rect, close_window,
+    create_child_control, create_owner_button, disable_native_border, focus, hit_test,
+    invalidate, is_window, minimize, move_child, move_window, notify, restart_timer,
+    restore_and_activate, set_control_font, set_cue_banner, set_dc_colors,
+    set_min_track_size, set_topmost, show_and_update, show_error, show_popup_menu,
+    stop_timer, wide,
 };
 use super::window_host::{CreateContext, MessageResult, WindowController, dispatch};
 use super::{NOTE_CLASS, SharedState, WM_NOTE_CLOSED, WM_REFRESH_NOTES};
@@ -65,6 +66,8 @@ struct NoteWindow {
     dirty: bool,
     suppress_change: bool,
     pinned: bool,
+    /// 현재 모니터 배율을 캡슐화해 레이아웃과 폰트가 같은 기준으로 확대되게 한다.
+    dpi: Dpi,
     /// GDI 자원은 RAII 타입이므로 객체가 사라질 때 자동으로 해제된다.
     font: Font,
     font_button: Font,
@@ -73,7 +76,7 @@ struct NoteWindow {
 
 impl NoteWindow {
     /// 저장소에서 초기 색상을 읽어 아직 HWND가 없는 창 객체를 만든다.
-    fn new(shared: Rc<SharedState>, manager: HWND, note_id: u64) -> Self {
+    fn new(shared: Rc<SharedState>, manager: HWND, note_id: u64, dpi: Dpi) -> Self {
         let color = shared
             .store
             .borrow()
@@ -91,8 +94,9 @@ impl NoteWindow {
             dirty: false,
             suppress_change: false,
             pinned: false,
-            font: Font::new(22, FW_NORMAL as i32, false),
-            font_button: Font::new(18, FW_NORMAL as i32, false),
+            dpi,
+            font: Font::new(22, FW_NORMAL as i32, false, dpi),
+            font_button: Font::new(18, FW_NORMAL as i32, false, dpi),
             note_brush: Brush::new(palette.body),
         }
     }
@@ -142,18 +146,54 @@ impl NoteWindow {
         let rect = client_rect(self.window);
         let width = rect.right.max(1);
         let height = rect.bottom.max(1);
-        let toolbar_y = height - 56;
-        move_child(self.window, ID_NOTE_MENU, 4, 4, 44, 44);
-        move_child(self.window, ID_NOTE_MORE, width - 190, 4, 44, 44);
-        move_child(self.window, ID_NOTE_PIN, width - 146, 4, 44, 44);
-        move_child(self.window, ID_NOTE_MIN, width - 102, 4, 44, 44);
-        move_child(self.window, ID_NOTE_CLOSE, width - 54, 4, 48, 44);
+        let scale = |value| self.dpi.scale(value);
+        let toolbar_y = height - scale(56);
+        move_child(
+            self.window,
+            ID_NOTE_MENU,
+            scale(4),
+            scale(4),
+            scale(44),
+            scale(44),
+        );
+        move_child(
+            self.window,
+            ID_NOTE_MORE,
+            width - scale(190),
+            scale(4),
+            scale(44),
+            scale(44),
+        );
+        move_child(
+            self.window,
+            ID_NOTE_PIN,
+            width - scale(146),
+            scale(4),
+            scale(44),
+            scale(44),
+        );
+        move_child(
+            self.window,
+            ID_NOTE_MIN,
+            width - scale(102),
+            scale(4),
+            scale(44),
+            scale(44),
+        );
+        move_child(
+            self.window,
+            ID_NOTE_CLOSE,
+            width - scale(54),
+            scale(4),
+            scale(48),
+            scale(44),
+        );
         move_window(
             self.editor,
-            20,
-            72,
-            (width - 40).max(1),
-            (height - 146).max(1),
+            scale(20),
+            scale(72),
+            (width - scale(40)).max(1),
+            (height - scale(146)).max(1),
         );
         for (offset, id) in [ID_BOLD, ID_ITALIC, ID_UNDERLINE, ID_STRIKE, ID_BULLET]
             .iter()
@@ -162,20 +202,36 @@ impl NoteWindow {
             move_child(
                 self.window,
                 *id,
-                10 + offset as i32 * 48,
+                scale(10 + offset as i32 * 48),
                 toolbar_y,
-                42,
-                44,
+                scale(42),
+                scale(44),
             );
         }
         move_child(
             self.window,
             ID_SHOW_MANAGER,
-            (width - 132).max(250),
+            (width - scale(132)).max(scale(250)),
             toolbar_y,
-            120,
-            44,
+            scale(120),
+            scale(44),
         );
+    }
+
+    /// 새 모니터의 DPI에 맞춰 폰트와 모든 자식 컨트롤을 다시 구성한다.
+    fn update_dpi(&mut self, dpi: Dpi) {
+        if self.dpi == dpi {
+            return;
+        }
+        self.dpi = dpi;
+        let font = Font::new(22, FW_NORMAL as i32, false, dpi);
+        let font_button = Font::new(18, FW_NORMAL as i32, false, dpi);
+        // Rich Edit가 새 핸들을 저장한 뒤 기존 Font를 교체하고 Drop한다.
+        set_control_font(self.editor, font.handle());
+        self.font = font;
+        self.font_button = font_button;
+        self.layout();
+        invalidate(self.window, true);
     }
 
     /// Markdown 원문을 저장소에서 복제한 뒤 서식이 적용된 Rich Edit 내용으로 변환한다.
@@ -329,7 +385,8 @@ pub(crate) fn create_window(
     manager: HWND,
     note_id: u64,
 ) -> Result<HWND, String> {
-    let context = CreateContext::new(NoteWindow::new(shared, manager, note_id));
+    let dpi = Dpi::for_window(manager);
+    let context = CreateContext::new(NoteWindow::new(shared, manager, note_id, dpi));
     // SAFETY: lpParam은 호출 동안 살아 있는 CreateContext이며 문자열은 null 종료 UTF-16이다.
     // 성공 시 컨트롤러 소유권은 window_host의 Rc 강한 참조로 이전된다.
     let window = unsafe {
@@ -340,8 +397,8 @@ pub(crate) fn create_window(
             WS_POPUP | WS_THICKFRAME | WS_MINIMIZEBOX,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
-            630,
-            760,
+            dpi.scale(630),
+            dpi.scale(760),
             manager,
             null_mut(),
             GetModuleHandleW(null()),
@@ -385,6 +442,7 @@ impl WindowController for NoteWindow {
         match message {
             WM_CREATE => {
                 disable_native_border(self.window);
+                self.update_dpi(Dpi::for_window(self.window));
                 match self.initialize() {
                     Ok(()) => MessageResult::Handled(0),
                     Err(error) => {
@@ -396,13 +454,18 @@ impl WindowController for NoteWindow {
             WM_NCCALCSIZE => MessageResult::Handled(0),
             WM_NCPAINT => MessageResult::Handled(0),
             WM_NCACTIVATE => MessageResult::Handled(1),
-            WM_NCHITTEST => MessageResult::Handled(hit_test(self.window, lparam, 52)),
+            WM_NCHITTEST => MessageResult::Handled(hit_test(
+                self.window,
+                lparam,
+                self.dpi.scale(52),
+                self.dpi.scale(7),
+            )),
             WM_SIZE => {
                 self.layout();
                 MessageResult::Handled(0)
             }
             WM_PAINT => {
-                note_view::paint(self.window, self.color);
+                note_view::paint(self.window, self.color, self.dpi);
                 MessageResult::Handled(0)
             }
             WM_ERASEBKGND => MessageResult::Handled(1),
@@ -430,6 +493,7 @@ impl WindowController for NoteWindow {
                     self.pinned,
                     self.font_button.handle(),
                     kind,
+                    self.dpi,
                 );
                 MessageResult::Handled(1)
             }
@@ -444,7 +508,12 @@ impl WindowController for NoteWindow {
                 MessageResult::Handled(0)
             }
             WM_GETMINMAXINFO => {
-                set_min_track_size(lparam, 380, 320);
+                set_min_track_size(lparam, self.dpi.scale(380), self.dpi.scale(320));
+                MessageResult::Handled(0)
+            }
+            WM_DPICHANGED => {
+                self.update_dpi(Dpi::from_message(wparam));
+                apply_dpi_suggested_rect(self.window, lparam);
                 MessageResult::Handled(0)
             }
             WM_CLOSE => {

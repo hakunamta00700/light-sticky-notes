@@ -14,7 +14,7 @@ use crate::store::NoteColor;
 
 use super::theme::{DARK_TEXT, TEXT, note_palette, rgb};
 use super::win32::{
-    draw_text, fill_rect, fill_round_rect, stroke_round_rect, window_text, with_paint,
+    Dpi, draw_text, fill_rect, fill_round_rect, stroke_round_rect, window_text, with_paint,
 };
 
 /// 같은 버튼 그리기 함수가 위치별 표현 차이를 알 수 있게 하는 의미 있는 열거형이다.
@@ -27,16 +27,18 @@ pub(super) enum ButtonKind {
 }
 
 /// 현재 메모 색상으로 제목 영역, 본문, 도구 모음 배경을 칠한다.
-pub(super) fn paint(window: HWND, color: NoteColor) {
+pub(super) fn paint(window: HWND, color: NoteColor, dpi: Dpi) {
     let palette = note_palette(color);
     with_paint(window, |hdc, rect| {
+        let title_height = dpi.scale(52);
+        let toolbar_height = dpi.scale(64);
         fill_rect(
             hdc,
             &RECT {
                 left: 0,
                 top: 0,
                 right: rect.right,
-                bottom: 52,
+                bottom: title_height,
             },
             palette.top,
         );
@@ -44,7 +46,7 @@ pub(super) fn paint(window: HWND, color: NoteColor) {
             hdc,
             &RECT {
                 left: 0,
-                top: 52,
+                top: title_height,
                 right: rect.right,
                 bottom: rect.bottom,
             },
@@ -54,7 +56,7 @@ pub(super) fn paint(window: HWND, color: NoteColor) {
             hdc,
             &RECT {
                 left: 0,
-                top: rect.bottom - 64,
+                top: rect.bottom - toolbar_height,
                 right: rect.right,
                 bottom: rect.bottom,
             },
@@ -70,6 +72,7 @@ pub(super) fn draw_button(
     pinned: bool,
     font: HFONT,
     kind: ButtonKind,
+    dpi: Dpi,
 ) {
     let pressed = draw.itemState & ODS_SELECTED != 0;
     let title_button = matches!(kind, ButtonKind::Title | ButtonKind::Pin);
@@ -93,8 +96,8 @@ pub(super) fn draw_button(
         palette.toolbar
     };
     if manager_button {
-        fill_round_rect(draw.hDC, &draw.rcItem, background, 10);
-        stroke_round_rect(draw.hDC, &draw.rcItem, TEXT, 10);
+        fill_round_rect(draw.hDC, &draw.rcItem, background, dpi.scale(10));
+        stroke_round_rect(draw.hDC, &draw.rcItem, TEXT, dpi.scale(10));
     } else {
         fill_rect(draw.hDC, &draw.rcItem, background)
     }

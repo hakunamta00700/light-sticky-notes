@@ -20,7 +20,10 @@ use std::rc::Rc;
 use windows_sys::Win32::UI::WindowsAndMessaging::WM_APP;
 
 use crate::store::{NoteStore, default_data_dir};
-use win32::{load_library, register_class, run_message_loop, show_and_update, show_error};
+use win32::{
+    enable_per_monitor_dpi_awareness, load_library, register_class, run_message_loop,
+    show_and_update, show_error,
+};
 
 pub(crate) const APP_NAME: &str = "Feather Notes";
 pub(crate) const MANAGER_CLASS: &str = "FeatherNotesManager";
@@ -45,6 +48,8 @@ pub(crate) fn launch() {
 
 /// 필요한 창 클래스를 등록하고 관리 창을 만든 뒤 이벤트 루프에 진입한다.
 fn run() -> Result<(), String> {
+    // 창 생성 전에 DPI 인식 모드를 정해야 Windows가 완성된 화면을 비트맵으로 확대하지 않는다.
+    enable_per_monitor_dpi_awareness();
     // Rich Edit 컨트롤은 DLL을 먼저 로드해야 창 클래스 이름을 사용할 수 있다.
     if !load_library("Msftedit.dll") {
         return Err("Windows Rich Edit 구성 요소를 불러오지 못했습니다.".into());
