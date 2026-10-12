@@ -98,7 +98,7 @@ impl NoteStore {
 
         // 최신 ID가 앞에 오도록 정렬한다. `sort_unstable_by`는 동일 ID의 순서를 보장할 필요가
         // 없는 대신 추가 메모리를 적게 사용하는 정렬이다.
-        notes.sort_unstable_by(|left, right| right.id.cmp(&left.id));
+        notes.sort_unstable_by_key(|note| std::cmp::Reverse(note.id));
         let mut store = Self { root, notes };
         if store.notes.is_empty() {
             store.create_note()?;
@@ -150,17 +150,18 @@ impl NoteStore {
 
     /// 인덱스로 선택한 메모를 디스크에 저장한다.
     pub fn save(&self, index: usize) -> io::Result<()> {
-        let note = self.notes.get(index).ok_or_else(|| {
-            io::Error::new(io::ErrorKind::NotFound, "note index does not exist")
-        })?;
+        let note = self
+            .notes
+            .get(index)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "note index does not exist"))?;
         self.write(note)
     }
 
     /// 색상을 메모리와 디스크에 동시에 반영한다.
     pub fn set_color(&mut self, id: u64, color: NoteColor) -> io::Result<()> {
-        let note = self.note_by_id_mut(id).ok_or_else(|| {
-            io::Error::new(io::ErrorKind::NotFound, "note id does not exist")
-        })?;
+        let note = self
+            .note_by_id_mut(id)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "note id does not exist"))?;
         note.color = color;
         let note = note.clone();
         self.write_color(&note)
@@ -307,6 +308,9 @@ mod tests {
     fn title_uses_first_nonempty_line_and_limits_unicode_safely() {
         assert_eq!(note_title("\n  제목  \n본문"), "제목");
         assert_eq!(note_title("   \n"), "새 메모");
-        assert_eq!(note_title(&"가".repeat(40)), format!("{}…", "가".repeat(36)));
+        assert_eq!(
+            note_title(&"가".repeat(40)),
+            format!("{}…", "가".repeat(36))
+        );
     }
 }

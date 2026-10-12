@@ -5,9 +5,7 @@
 #![forbid(unsafe_code)]
 
 use windows_sys::Win32::Foundation::{HWND, RECT};
-use windows_sys::Win32::Graphics::Gdi::{
-    DT_CENTER, DT_SINGLELINE, DT_VCENTER, HFONT,
-};
+use windows_sys::Win32::Graphics::Gdi::{DT_CENTER, DT_SINGLELINE, DT_VCENTER, HFONT};
 use windows_sys::Win32::UI::Controls::{DRAWITEMSTRUCT, ODS_SELECTED};
 
 use crate::store::NoteColor;

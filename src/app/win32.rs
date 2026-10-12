@@ -173,11 +173,7 @@ pub(crate) fn disable_native_border(window: HWND) {
 }
 
 /// 부모가 직접 그리는 `BS_OWNERDRAW` 버튼을 생성한다.
-pub(crate) fn create_owner_button(
-    window: HWND,
-    text: &str,
-    id: usize,
-) -> HWND {
+pub(crate) fn create_owner_button(window: HWND, text: &str, id: usize) -> HWND {
     unsafe {
         CreateWindowExW(
             0,
@@ -197,12 +193,7 @@ pub(crate) fn create_owner_button(
 }
 
 /// 클래스 이름과 스타일로 일반 자식 컨트롤을 생성한다.
-pub(crate) fn create_child_control(
-    parent: HWND,
-    class: &str,
-    style: u32,
-    id: usize,
-) -> HWND {
+pub(crate) fn create_child_control(parent: HWND, class: &str, style: u32, id: usize) -> HWND {
     unsafe {
         CreateWindowExW(
             0,
@@ -229,14 +220,7 @@ pub(crate) fn client_rect(window: HWND) -> RECT {
 }
 
 /// 부모와 컨트롤 ID로 자식 창을 찾아 이동한다.
-pub(crate) fn move_child(
-    parent: HWND,
-    id: usize,
-    x: i32,
-    y: i32,
-    width: i32,
-    height: i32,
-) {
+pub(crate) fn move_child(parent: HWND, id: usize, x: i32, y: i32, width: i32, height: i32) {
     unsafe { MoveWindow(GetDlgItem(parent, id as i32), x, y, width, height, 1) };
 }
 
@@ -253,14 +237,7 @@ pub(crate) fn set_control_font(control: HWND, font: HFONT) {
 /// 편집 컨트롤이 비어 있을 때 표시할 안내 문구를 설정한다.
 pub(crate) fn set_cue_banner(control: HWND, text: &str) {
     const EM_SETCUEBANNER: u32 = 0x1501;
-    unsafe {
-        SendMessageW(
-            control,
-            EM_SETCUEBANNER,
-            0,
-            wide(text).as_ptr() as LPARAM,
-        )
-    };
+    unsafe { SendMessageW(control, EM_SETCUEBANNER, 0, wide(text).as_ptr() as LPARAM) };
 }
 
 /// 지정한 창 영역을 무효화하여 다음 페인트 메시지에서 다시 그리게 한다.
@@ -338,7 +315,11 @@ pub(crate) fn set_topmost(window: HWND, enabled: bool) {
     unsafe {
         SetWindowPos(
             window,
-            if enabled { HWND_TOPMOST } else { HWND_NOTOPMOST },
+            if enabled {
+                HWND_TOPMOST
+            } else {
+                HWND_NOTOPMOST
+            },
             0,
             0,
             0,
@@ -527,12 +508,7 @@ pub(crate) fn fill_rect(hdc: HDC, rect: &RECT, color: COLORREF) {
 }
 
 /// 채움색을 가진 둥근 직사각형을 그린다.
-pub(crate) fn fill_round_rect(
-    hdc: HDC,
-    rect: &RECT,
-    color: COLORREF,
-    radius: i32,
-) {
+pub(crate) fn fill_round_rect(hdc: HDC, rect: &RECT, color: COLORREF, radius: i32) {
     let brush = unsafe { CreateSolidBrush(color) };
     let pen = unsafe { CreatePen(PS_NULL, 0, color) };
     // 선택 전 객체를 기억했다가 복원해야 HDC가 삭제된 객체를 계속 참조하지 않는다.
@@ -556,12 +532,7 @@ pub(crate) fn fill_round_rect(
 }
 
 /// 내부를 채우지 않고 둥근 테두리만 그린다.
-pub(crate) fn stroke_round_rect(
-    hdc: HDC,
-    rect: &RECT,
-    color: COLORREF,
-    radius: i32,
-) {
+pub(crate) fn stroke_round_rect(hdc: HDC, rect: &RECT, color: COLORREF, radius: i32) {
     let brush = unsafe { GetStockObject(NULL_BRUSH) };
     let pen = unsafe { CreatePen(PS_SOLID, 1, color) };
     let old_brush = unsafe { SelectObject(hdc, brush) };

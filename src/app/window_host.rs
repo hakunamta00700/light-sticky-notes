@@ -31,12 +31,7 @@ pub(crate) trait WindowController {
     fn attach(&mut self, window: HWND);
 
     /// Win32 메시지를 객체의 동작으로 변환한다.
-    fn handle_message(
-        &mut self,
-        message: u32,
-        wparam: WPARAM,
-        lparam: LPARAM,
-    ) -> MessageResult;
+    fn handle_message(&mut self, message: u32, wparam: WPARAM, lparam: LPARAM) -> MessageResult;
 
     /// 창이 완전히 제거되기 직전에 필요한 정리 동작을 수행한다.
     fn on_destroy(&mut self) {}
@@ -100,8 +95,7 @@ pub(crate) unsafe fn dispatch<T: WindowController>(
     }
 
     // SAFETY: 이 창 클래스의 GWLP_USERDATA에는 위에서 저장한 RefCell<T> 포인터만 들어간다.
-    let pointer = unsafe { GetWindowLongPtrW(window, GWLP_USERDATA) }
-        as *const RefCell<T>;
+    let pointer = unsafe { GetWindowLongPtrW(window, GWLP_USERDATA) } as *const RefCell<T>;
     if pointer.is_null() {
         // SAFETY: 처리할 객체가 없으므로 Windows가 제공한 원래 매개변수를 기본 프로시저에 전달한다.
         return unsafe { DefWindowProcW(window, message, wparam, lparam) };

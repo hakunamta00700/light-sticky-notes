@@ -9,17 +9,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use windows_sys::Win32::Foundation::{HWND, RECT};
 use windows_sys::Win32::Graphics::Gdi::{
-    DT_CENTER, DT_END_ELLIPSIS, DT_LEFT, DT_RIGHT, DT_SINGLELINE, DT_TOP, DT_VCENTER,
-    HFONT,
+    DT_CENTER, DT_END_ELLIPSIS, DT_LEFT, DT_RIGHT, DT_SINGLELINE, DT_TOP, DT_VCENTER, HFONT,
 };
 use windows_sys::Win32::UI::Controls::{DRAWITEMSTRUCT, ODS_SELECTED};
 
 use crate::store::note_title;
 
 use super::markdown;
-use super::theme::{
-    ACCENT, MANAGER_BG, MUTED, PANEL_BG, PANEL_HOVER, TEXT, note_palette, rgb,
-};
+use super::theme::{ACCENT, MANAGER_BG, MUTED, PANEL_BG, PANEL_HOVER, TEXT, note_palette, rgb};
 use super::win32::{
     Dpi, draw_text, fill_rect, fill_round_rect, stroke_round_rect, window_text, with_paint,
 };
@@ -134,44 +131,44 @@ pub(super) fn draw_note_card(
         scale(6),
     );
     draw_text(
-            draw.hDC,
-            &note_title(&rendered_body),
-            RECT {
-                left: card.left + scale(24),
-                top: card.top + scale(22),
-                right: card.right - scale(96),
-                bottom: card.top + scale(52),
-            },
-            font_medium,
-            TEXT,
-            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS,
-        );
+        draw.hDC,
+        &note_title(&rendered_body),
+        RECT {
+            left: card.left + scale(24),
+            top: card.top + scale(22),
+            right: card.right - scale(96),
+            bottom: card.top + scale(52),
+        },
+        font_medium,
+        TEXT,
+        DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS,
+    );
     draw_text(
-            draw.hDC,
-            &relative_time(note.id),
-            RECT {
-                left: card.right - scale(110),
-                top: card.top + scale(22),
-                right: card.right - scale(18),
-                bottom: card.top + scale(52),
-            },
-            font,
-            TEXT,
-            DT_RIGHT | DT_VCENTER | DT_SINGLELINE,
-        );
+        draw.hDC,
+        &relative_time(note.id),
+        RECT {
+            left: card.right - scale(110),
+            top: card.top + scale(22),
+            right: card.right - scale(18),
+            bottom: card.top + scale(52),
+        },
+        font,
+        TEXT,
+        DT_RIGHT | DT_VCENTER | DT_SINGLELINE,
+    );
     draw_text(
-            draw.hDC,
-            &note_preview(&rendered_body),
-            RECT {
-                left: card.left + scale(24),
-                top: card.top + scale(61),
-                right: card.right - scale(20),
-                bottom: card.bottom - scale(13),
-            },
-            font,
-            MUTED,
-            DT_LEFT | DT_TOP | DT_SINGLELINE | DT_END_ELLIPSIS,
-        );
+        draw.hDC,
+        &note_preview(&rendered_body),
+        RECT {
+            left: card.left + scale(24),
+            top: card.top + scale(61),
+            right: card.right - scale(20),
+            bottom: card.bottom - scale(13),
+        },
+        font,
+        MUTED,
+        DT_LEFT | DT_TOP | DT_SINGLELINE | DT_END_ELLIPSIS,
+    );
 }
 
 /// 관리 창의 일반 버튼과 제목 표시줄 버튼을 공통 방식으로 그린다.
@@ -210,7 +207,11 @@ fn note_preview(body: &str) -> String {
         .skip(1)
         .collect::<Vec<_>>()
         .join("  ");
-    let source = if joined.is_empty() { "내용 없음" } else { &joined };
+    let source = if joined.is_empty() {
+        "내용 없음"
+    } else {
+        &joined
+    };
     let mut chars = source.chars();
     let preview: String = chars.by_ref().take(52).collect();
     if chars.next().is_some() {

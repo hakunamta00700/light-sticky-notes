@@ -18,12 +18,11 @@ use super::markdown::{self, InlineFormat};
 use super::note_view::{self, ButtonKind};
 use super::theme::{TEXT, note_palette};
 use super::win32::{
-    Brush, Dpi, Font, apply_dpi_suggested_rect, client_rect, close_window,
-    create_child_control, create_owner_button, disable_native_border, focus, hit_test,
-    invalidate, is_window, minimize, move_child, move_window, notify, restart_timer,
-    restore_and_activate, set_control_font, set_cue_banner, set_dc_colors,
-    set_min_track_size, set_topmost, show_and_update, show_error, show_popup_menu,
-    stop_timer, wide,
+    Brush, Dpi, Font, apply_dpi_suggested_rect, client_rect, close_window, create_child_control,
+    create_owner_button, disable_native_border, focus, hit_test, invalidate, is_window, minimize,
+    move_child, move_window, notify, restart_timer, restore_and_activate, set_control_font,
+    set_cue_banner, set_dc_colors, set_min_track_size, set_topmost, show_and_update, show_error,
+    show_popup_menu, stop_timer, wide,
 };
 use super::window_host::{CreateContext, MessageResult, WindowController, dispatch};
 use super::{NOTE_CLASS, SharedState, WM_NOTE_CLOSED, WM_REFRESH_NOTES};
@@ -314,7 +313,12 @@ impl NoteWindow {
         if self.dirty {
             return;
         }
-        if let Err(error) = self.shared.store.borrow_mut().set_color(self.note_id, color) {
+        if let Err(error) = self
+            .shared
+            .store
+            .borrow_mut()
+            .set_color(self.note_id, color)
+        {
             show_error(
                 self.window,
                 &format!("메모 색상을 저장하지 못했습니다. {error}"),
@@ -352,16 +356,10 @@ impl NoteWindow {
             (ID_NOTE_CLOSE, BN_CLICKED) => close_window(self.window),
             (ID_NOTE_MIN, BN_CLICKED) => minimize(self.window),
             (ID_NOTE_PIN, BN_CLICKED) => self.toggle_pin(),
-            (ID_NOTE_MENU | ID_SHOW_MANAGER, BN_CLICKED) => {
-                restore_and_activate(self.manager)
-            }
+            (ID_NOTE_MENU | ID_SHOW_MANAGER, BN_CLICKED) => restore_and_activate(self.manager),
             (ID_NOTE_MORE, BN_CLICKED) => self.show_color_menu(),
             (
-                ID_COLOR_YELLOW
-                | ID_COLOR_GREEN
-                | ID_COLOR_BLUE
-                | ID_COLOR_PINK
-                | ID_COLOR_PURPLE
+                ID_COLOR_YELLOW | ID_COLOR_GREEN | ID_COLOR_BLUE | ID_COLOR_PINK | ID_COLOR_PURPLE
                 | ID_COLOR_GRAY,
                 0,
             ) => {
@@ -433,12 +431,7 @@ impl WindowController for NoteWindow {
     }
 
     /// Win32 메시지를 편집, 저장, 그리기 같은 객체 동작으로 변환한다.
-    fn handle_message(
-        &mut self,
-        message: u32,
-        wparam: WPARAM,
-        lparam: LPARAM,
-    ) -> MessageResult {
+    fn handle_message(&mut self, message: u32, wparam: WPARAM, lparam: LPARAM) -> MessageResult {
         match message {
             WM_CREATE => {
                 disable_native_border(self.window);
@@ -481,9 +474,7 @@ impl WindowController for NoteWindow {
                 };
                 let kind = match draw.CtlID as usize {
                     ID_NOTE_PIN => ButtonKind::Pin,
-                    ID_NOTE_MENU | ID_NOTE_MORE | ID_NOTE_MIN | ID_NOTE_CLOSE => {
-                        ButtonKind::Title
-                    }
+                    ID_NOTE_MENU | ID_NOTE_MORE | ID_NOTE_MIN | ID_NOTE_CLOSE => ButtonKind::Title,
                     ID_SHOW_MANAGER => ButtonKind::Manager,
                     _ => ButtonKind::Toolbar,
                 };

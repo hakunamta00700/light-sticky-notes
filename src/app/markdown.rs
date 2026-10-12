@@ -4,9 +4,7 @@
 //! 직접 보여 준다. 순수 파서/직렬화 로직과 Win32 메시지 경계를 같은 모듈 안에서 구분한다.
 
 use windows_sys::Win32::Foundation::{COLORREF, HWND, LPARAM, WPARAM};
-use windows_sys::Win32::UI::Controls::{
-    EM_GETSEL, EM_REPLACESEL, EM_SETLIMITTEXT, EM_SETSEL,
-};
+use windows_sys::Win32::UI::Controls::{EM_GETSEL, EM_REPLACESEL, EM_SETLIMITTEXT, EM_SETSEL};
 use windows_sys::Win32::UI::WindowsAndMessaging::{SendMessageW, SetWindowTextW, WM_USER};
 
 use super::win32::{wide, window_text};
@@ -358,14 +356,13 @@ fn render(source: &str) -> RenderedMarkdown {
             line_start = false;
             continue;
         }
-        if rest.starts_with('\\') {
-            let escaped = &rest[1..];
-            if let Some(value) = escaped.chars().next() {
-                append_char(&mut text, &mut runs, &mut position, value, style);
-                index += 1 + value.len_utf8();
-                line_start = false;
-                continue;
-            }
+        if let Some(escaped) = rest.strip_prefix('\\')
+            && let Some(value) = escaped.chars().next()
+        {
+            append_char(&mut text, &mut runs, &mut position, value, style);
+            index += 1 + value.len_utf8();
+            line_start = false;
+            continue;
         }
         if rest.starts_with("**") && (style.bold || rest[2..].contains("**")) {
             style.bold = !style.bold;
@@ -420,11 +417,12 @@ fn append_char(
     if style == TextStyle::default() {
         return;
     }
-    if let Some(last) = runs.last_mut() {
-        if last.end == start && last.style == style {
-            last.end = end;
-            return;
-        }
+    if let Some(last) = runs.last_mut()
+        && last.end == start
+        && last.style == style
+    {
+        last.end = end;
+        return;
     }
     runs.push(StyleRun { start, end, style });
 }

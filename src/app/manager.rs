@@ -23,9 +23,9 @@ use super::win32::{
     Brush, Dpi, Font, add_list_item, apply_dpi_suggested_rect, clear_list, client_rect,
     close_window, configure_list, confirm, create_child_control, create_owner_button,
     disable_native_border, finish_list_update, hit_test, invalidate, is_window, minimize,
-    move_child, move_window, restore_and_activate, quit_message_loop, select_list_item,
-    selected_list_index, set_control_font, set_cue_banner, set_dc_colors,
-    set_min_track_size, show_error, wide, window_text,
+    move_child, move_window, quit_message_loop, restore_and_activate, select_list_item,
+    selected_list_index, set_control_font, set_cue_banner, set_dc_colors, set_min_track_size,
+    show_error, wide, window_text,
 };
 use super::window_host::{CreateContext, MessageResult, WindowController, dispatch};
 use super::{APP_NAME, MANAGER_CLASS, SharedState, WM_NOTE_CLOSED, WM_REFRESH_NOTES};
@@ -157,7 +157,14 @@ impl ManagerWindow {
             scale(48),
             scale(44),
         );
-        move_child(self.window, ID_NEW, margin, action_y, action_width, action_height);
+        move_child(
+            self.window,
+            ID_NEW,
+            margin,
+            action_y,
+            action_width,
+            action_height,
+        );
         move_child(
             self.window,
             ID_DELETE,
@@ -239,9 +246,10 @@ impl ManagerWindow {
                 self.refresh_list();
                 self.open_note(id);
             }
-            Err(error) => {
-                show_error(self.window, &format!("새 메모를 만들지 못했습니다. {error}"))
-            }
+            Err(error) => show_error(
+                self.window,
+                &format!("새 메모를 만들지 못했습니다. {error}"),
+            ),
         }
     }
 
@@ -257,10 +265,10 @@ impl ManagerWindow {
             close_window(note_window);
         }
         let index = self.shared.store.borrow().index_of(id);
-        if let Some(index) = index {
-            if let Err(error) = self.shared.store.borrow_mut().delete(index) {
-                show_error(self.window, &format!("메모를 삭제하지 못했습니다. {error}"));
-            }
+        if let Some(index) = index
+            && let Err(error) = self.shared.store.borrow_mut().delete(index)
+        {
+            show_error(self.window, &format!("메모를 삭제하지 못했습니다. {error}"));
         }
         self.refresh_list();
     }
@@ -350,12 +358,7 @@ impl WindowController for ManagerWindow {
     }
 
     /// 절차적인 메시지 번호를 캡슐화된 창 동작으로 라우팅한다.
-    fn handle_message(
-        &mut self,
-        message: u32,
-        wparam: WPARAM,
-        lparam: LPARAM,
-    ) -> MessageResult {
+    fn handle_message(&mut self, message: u32, wparam: WPARAM, lparam: LPARAM) -> MessageResult {
         match message {
             WM_CREATE => {
                 disable_native_border(self.window);
